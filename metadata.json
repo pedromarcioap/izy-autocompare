@@ -1,0 +1,6 @@
+{
+  "name": "AutoCompare Multi-Marketplace - Extensão Chrome (5 Slots)",
+  "description": "Extensão para Google Chrome (Manifest V3) com Side Panel para captura automática e comparação simultânea de até 5 produtos da Shopee e AliExpress.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

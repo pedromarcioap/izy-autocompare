@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AutoCompare Multi-Marketplace</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    /* Specific sidepanel layout adjustments */
+    .slot-card {
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 10px;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      position: relative;
+    }
+    .slot-empty {
+      border: 1px dashed #334155;
+      background: rgba(15, 23, 42, 0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      color: #64748b;
+      padding: 16px 8px;
+    }
+    .slot-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .section-title {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #38bdf8;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+  </style>
+</head>
+<body>
+  <!-- Header Bar -->
+  <header style="margin-bottom: 12px; border-bottom: 1px solid #1e293b; padding-bottom: 10px;">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <div style="width: 28px; height: 28px; background: linear-gradient(135deg, #06b6d4, #2563eb); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 14px;">⚡</div>
+        <div>
+          <h1 style="font-size: 14px; font-weight: 800; color: #fff; margin: 0;">AutoCompare</h1>
+          <span style="font-size: 10px; color: #94a3b8; font-family: monospace;">5-SLOT MULTI-MARKETPLACE</span>
+        </div>
+      </div>
+      <button id="btnClearAll" class="btn-secondary" style="padding: 4px 8px; font-size: 11px;" title="Limpar todos os 5 slots">
+        🗑️ Limpar Todos
+      </button>
+    </div>
+
+    <!-- Main Capture Button -->
+    <button id="btnCaptureCurrent" class="btn-primary" style="margin-bottom: 8px;">
+      📥 Capturar Aba Atual para o Slot Livre
+    </button>
+
+    <!-- Specific Slot Selector Bar -->
+    <div style="display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: #94a3b8;">
+      <span>Ou capture para slot específico:</span>
+      <div style="display: flex; gap: 4px;">
+        <button class="btn-secondary btn-slot-direct" data-slot="0" style="padding: 2px 6px;">Slot 1</button>
+        <button class="btn-secondary btn-slot-direct" data-slot="1" style="padding: 2px 6px;">Slot 2</button>
+        <button class="btn-secondary btn-slot-direct" data-slot="2" style="padding: 2px 6px;">Slot 3</button>
+        <button class="btn-secondary btn-slot-direct" data-slot="3" style="padding: 2px 6px;">Slot 4</button>
+        <button class="btn-secondary btn-slot-direct" data-slot="4" style="padding: 2px 6px;">Slot 5</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Notification Banner -->
+  <div id="statusMessage" style="display: none; padding: 8px 12px; border-radius: 8px; font-size: 12px; margin-bottom: 12px;"></div>
+
+  <!-- 5 Slots Strip / Grid -->
+  <div class="section-title">
+    <span>📦 Slots de Produtos Ativos (<span id="slotCountLabel">0/5</span>)</span>
+  </div>
+  <div id="slotsContainer" class="slot-grid">
+    <!-- Rendered dynamically by sidepanel.js -->
+  </div>
+
+  <!-- Comparison Section (Rendered when >= 2 slots active) -->
+  <div id="comparisonSection" style="display: none; margin-top: 16px;">
+    
+    <!-- Financial Matrix -->
+    <div class="section-title" style="color: #34d399;">
+      <span>💰 Matriz Financeira Comparativa</span>
+    </div>
+    <div class="table-wrapper" style="margin-bottom: 16px;">
+      <table id="financialTable">
+        <!-- Rendered dynamically -->
+      </table>
+    </div>
+
+    <!-- Canonical Specs Matrix -->
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+      <div class="section-title" style="margin-bottom: 0;">
+        <span>🔍 Matriz de Especificações Canónicas</span>
+      </div>
+      <input
+        type="text"
+        id="specSearchInput"
+        placeholder="Filtrar atributos..."
+        style="background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 4px 8px; color: #fff; font-size: 11px; width: 140px;"
+      />
+    </div>
+
+    <div class="table-wrapper" style="max-height: 420px;">
+      <table id="specMatrixTable">
+        <!-- Rendered dynamically -->
+      </table>
+    </div>
+
+    <!-- Executive Verdict & Export Actions -->
+    <div id="verdictCard" style="margin-top: 16px; background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; padding: 12px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+        <span style="font-weight: 700; color: #f59e0b; font-size: 12px; text-transform: uppercase;">⚖️ Veredito de Compra</span>
+        <button id="btnCopyReport" class="btn-secondary" style="padding: 4px 8px; font-size: 11px;">
+          📋 Copiar Relatório
+        </button>
+      </div>
+      <div id="verdictContent" style="font-size: 12px; color: #cbd5e1; line-height: 1.5;"></div>
+    </div>
+  </div>
+
+  <!-- Empty State Placeholder when < 2 slots filled -->
+  <div id="emptyComparisonState" style="text-align: center; padding: 32px 16px; background: #0f172a; border: 1px dashed #334155; border-radius: 12px; color: #94a3b8; margin-top: 16px;">
+    <div style="font-size: 28px; margin-bottom: 8px;">🛍️</div>
+    <h3 style="font-size: 14px; font-weight: 700; color: #f1f5f9; margin-bottom: 4px;">Capture pelo menos 2 produtos</h3>
+    <p style="font-size: 12px; color: #64748b; max-width: 280px; margin: 0 auto;">
+      Abra abas de produtos na Shopee ou AliExpress e clique em <strong>"Capturar Aba Atual"</strong> para gerar a matriz comparativa.
+    </p>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
