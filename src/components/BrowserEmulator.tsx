@@ -60,6 +60,7 @@ export const BrowserEmulator: React.FC<BrowserEmulatorProps> = ({
 
     const newTab: SimulatedTab = {
       id: `tab-custom-${Date.now()}`,
+      category: 'Produto Personalizado',
       platform: customPlatform,
       title: customTitle.trim(),
       url:

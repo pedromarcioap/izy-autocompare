@@ -1,26 +1,10 @@
 /**
- * AutoCompare Multi-Marketplace - SidePanel Logic (5-Slot Edition)
+ * AutoCompare Multi-Marketplace - SidePanel Logic (Manifest V3)
+ * Módulo de Extração e Auditoria 100% Dinâmico & Agnóstico a Categorias
  */
 
-// Canonical Specification Groupings & Normalization Rules
-const CANONICAL_SPECS = [
-  { key: 'bluetooth', label: 'Bluetooth / Conexão', synonyms: ['bluetooth', 'versão bluetooth', 'conexão', 'conexão sem fio', 'bt'] },
-  { key: 'battery', label: 'Bateria & Capacidade', synonyms: ['bateria', 'capacidade', 'capacidade da bateria', 'mah', 'bateria do fone', 'bateria da case'] },
-  { key: 'autonomy', label: 'Autonomia / Duração', synonyms: ['autonomia', 'duração da bateria', 'tempo de reprodução', 'tempo de uso', 'autonomia total'] },
-  { key: 'power', label: 'Potência / Carregamento', synonyms: ['potência', 'potência máxima', 'watts', 'saída', 'carregamento', 'fast charge', 'entrada de carga'] },
-  { key: 'anc', label: 'Cancelamento de Ruído (ANC)', synonyms: ['cancelamento de ruído', 'cancelamento ativo', 'anc', 'redução de ruído'] },
-  { key: 'waterproof', label: 'Proteção / Resistência à Água', synonyms: ['resistência à água', 'proteção contra água', 'ipx', 'ip67', 'ip68', 'ipx4', 'ipx5', 'impermeável'] },
-  { key: 'audio_driver', label: 'Driver de Som / Alto-falante', synonyms: ['driver', 'drivers', 'alto-falante', 'tamanho do driver', 'diafragma'] },
-  { key: 'mic', label: 'Microfone & Chamadas', synonyms: ['microfone', 'microfones', 'enc', 'chamadas'] },
-  { key: 'display', label: 'Tela & Display', synonyms: ['tela', 'display', 'tipo de tela', 'resolução', 'painel'] },
-  { key: 'material', label: 'Material & Acabamento', synonyms: ['material', 'material do corpo', 'acabamento', 'estrutura'] },
-  { key: 'weight', label: 'Peso', synonyms: ['peso', 'peso do produto', 'peso do fone', 'peso total'] },
-  { key: 'dimensions', label: 'Dimensões / Tamanho', synonyms: ['dimensões', 'tamanho', 'medidas'] },
-  { key: 'app', label: 'Suporte a Aplicativo', synonyms: ['aplicativo', 'app dedicado', 'app', 'software'] },
-  { key: 'warranty', label: 'Garantia', synonyms: ['garantia', 'garantia do fabricante', 'garantia do vendedor'] },
-];
-
 let currentSlots = [null, null, null, null, null];
+let currentAIResult = null;
 
 // Initialize on DOM load
 document.addEventListener('DOMContentLoaded', () => {
@@ -92,12 +76,6 @@ async function captureActiveTabToSlot(slotIndex) {
       return;
     }
 
-    // Check if URL is supported
-    const url = tab.url || '';
-    if (!url.includes('shopee') && !url.includes('aliexpress')) {
-      showStatus('A aba atual não parece ser um produto da Shopee ou AliExpress.', 'warning');
-    }
-
     // Send extraction message to content script
     chrome.tabs.sendMessage(tab.id, { action: 'EXTRACT_PRODUCT_DATA' }, async (response) => {
       if (chrome.runtime.lastError || !response || !response.success) {
@@ -108,7 +86,6 @@ async function captureActiveTabToSlot(slotIndex) {
             files: ['content.js'],
           });
 
-          // Retry sending message
           setTimeout(() => {
             chrome.tabs.sendMessage(tab.id, { action: 'EXTRACT_PRODUCT_DATA' }, (retryRes) => {
               if (retryRes && retryRes.success) {
@@ -161,9 +138,126 @@ function clearSingleSlot(slotIndex) {
   });
 }
 
-// Helper: Format BRL
+// Format BRL
 function formatCurrency(val) {
   return (val || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+// Helper: normalize string
+function cleanStr(s) {
+  return (s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Motor Dinâmico e Agnóstico de IA (Executa as 3 etapas obrigatórias)
+ */
+function processDynamicAIAudit(slots) {
+  const activeSlots = slots.filter(s => s !== null);
+  const slot1 = slots[0];
+
+  // Etapa 1 & 2: Mineração e Fusão semântica de atributos existentes
+  const attributeMap = new Map(); // cleanKey -> Display Name
+
+  activeSlots.forEach(slot => {
+    Object.keys(slot.specs || {}).forEach(k => {
+      const cleanK = cleanStr(k);
+      if (cleanK && !attributeMap.has(cleanK)) {
+        attributeMap.set(cleanK, k.trim());
+      }
+    });
+  });
+
+  // Inferir categoria a partir dos títulos
+  const allTitles = activeSlots.map(s => s.title.toLowerCase()).join(' ');
+  let detectedCategory = 'Produto Geral & E-commerce';
+  if (/furadeira|parafusadeira|torque|mandril|rpm|impacto/i.test(allTitles)) {
+    detectedCategory = 'Ferramentas Elétricas & Manuais';
+  } else if (/serum|vitamina|anti-idade|pele|fps|facial/i.test(allTitles)) {
+    detectedCategory = 'Cosméticos & Cuidados Pessoais';
+  } else if (/camiseta|algodao|fio|gola|tecido|pima/i.test(allTitles)) {
+    detectedCategory = 'Vestuário & Moda Têxtil';
+  } else if (/fone|bluetooth|tws|anc|estojo|driver/i.test(allTitles)) {
+    detectedCategory = 'Áudio & Fones de Ouvido';
+  }
+
+  // Etapa 3: Confronto Cruzado Tendo o Slot 1 como Parâmetro
+  const comparisonMatrix = [];
+
+  attributeMap.forEach((displayLabel, cleanKey) => {
+    // Valor no Slot 1 (Base de referência)
+    let s1Val = 'Não informado';
+    if (slot1 && slot1.specs) {
+      for (const [k, v] of Object.entries(slot1.specs)) {
+        if (cleanStr(k) === cleanKey || cleanStr(k).includes(cleanKey) || cleanKey.includes(cleanStr(k))) {
+          s1Val = v;
+          break;
+        }
+      }
+    }
+
+    const comparisons = {};
+
+    // Comparar slots 2 a 5 com o Slot 1
+    for (let i = 1; i < 5; i++) {
+      const slotNum = i + 1;
+      const slotObj = slots[i];
+      const slotKey = `slot_${slotNum}`;
+
+      if (!slotObj) continue;
+
+      let foundVal = null;
+      for (const [k, v] of Object.entries(slotObj.specs || {})) {
+        if (cleanStr(k) === cleanKey || cleanStr(k).includes(cleanKey) || cleanKey.includes(cleanStr(k))) {
+          foundVal = v;
+          break;
+        }
+      }
+
+      if (!foundVal) {
+        comparisons[slotKey] = {
+          value: 'Não informado',
+          status: 'missing',
+        };
+      } else {
+        const isIdentical = s1Val !== 'Não informado' && cleanStr(s1Val) === cleanStr(foundVal);
+        comparisons[slotKey] = {
+          value: foundVal,
+          status: isIdentical ? 'equal' : 'divergent',
+        };
+      }
+    }
+
+    comparisonMatrix.push({
+      attribute_name: displayLabel,
+      slot_1_value: s1Val,
+      comparisons,
+    });
+  });
+
+  // Veredito Executivo
+  let minTotal = Infinity;
+  let minSlot = activeSlots[0];
+  activeSlots.forEach(s => {
+    const tot = (s.price || 0) + (s.shipping || 0);
+    if (tot < minTotal) {
+      minTotal = tot;
+      minSlot = s;
+    }
+  });
+
+  const executiveSummary = `O Slot ${minSlot?.id} (${minSlot?.platform}) lidera no quesito custo-benefício direto com desembolso de ${formatCurrency(minTotal)}. O Slot 1 serve de referência nas especificações técnicas para avaliar eventuais upgrades.`;
+
+  return {
+    detected_category: detectedCategory,
+    comparison_matrix: comparisonMatrix,
+    executive_summary: executiveSummary,
+  };
 }
 
 // Render Master UI
@@ -180,15 +274,18 @@ function renderUI() {
   for (let i = 0; i < 5; i++) {
     const slot = currentSlots[i];
     const slotEl = document.createElement('div');
+    const isBase = i === 0;
 
     if (slot) {
       const isShopee = slot.platform.toLowerCase().includes('shopee');
       const totalPrice = (slot.price || 0) + (slot.shipping || 0);
 
       slotEl.className = 'slot-card';
+      if (isBase) slotEl.style.border = '1px solid #06b6d4';
+
       slotEl.innerHTML = `
         <div style="display: flex; align-items: center; justify-content: space-between;">
-          <span class="badge ${isShopee ? 'badge-shopee' : 'badge-ali'}">Slot ${i + 1} • ${slot.platform}</span>
+          <span class="badge ${isShopee ? 'badge-shopee' : 'badge-ali'}">Slot ${i + 1} • ${slot.platform}${isBase ? ' (Base)' : ''}</span>
           <button class="btn-clear-slot" data-slot="${i}" style="background: transparent; border: none; color: #f43f5e; cursor: pointer; font-size: 12px;" title="Limpar este slot">✕</button>
         </div>
         <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px;">
@@ -211,7 +308,7 @@ function renderUI() {
       slotEl.className = 'slot-card slot-empty';
       slotEl.innerHTML = `
         <div>
-          <div style="font-weight: 700; font-size: 11px; color: #475569; margin-bottom: 2px;">SLOT ${i + 1} LIVRE</div>
+          <div style="font-weight: 700; font-size: 11px; color: #475569; margin-bottom: 2px;">SLOT ${i + 1} LIVRE ${isBase ? '(BASE)' : ''}</div>
           <button class="btn-capture-slot" data-slot="${i}" style="font-size: 10px; color: #38bdf8; background: transparent; border: 1px dashed #0284c7; padding: 3px 6px; border-radius: 4px; cursor: pointer;">
             + Capturar Aba
           </button>
@@ -243,12 +340,16 @@ function renderUI() {
   if (activeCount >= 2) {
     compSection.style.display = 'block';
     emptyState.style.display = 'none';
+
+    currentAIResult = processDynamicAIAudit(currentSlots);
+
     renderFinancialMatrix(activeProducts);
-    renderSpecMatrix(activeProducts);
-    renderExecutiveVerdict(activeProducts);
+    renderDynamicSpecMatrix(currentAIResult, activeProducts);
+    renderExecutiveVerdict(currentAIResult, activeProducts);
   } else {
     compSection.style.display = 'none';
     emptyState.style.display = 'block';
+    currentAIResult = null;
   }
 }
 
@@ -256,7 +357,6 @@ function renderUI() {
 function renderFinancialMatrix(activeProducts) {
   const table = document.getElementById('financialTable');
   
-  // Calculate lowest total price
   let minTotal = Infinity;
   activeProducts.forEach(p => {
     const total = (p.price || 0) + (p.shipping || 0);
@@ -267,10 +367,10 @@ function renderFinancialMatrix(activeProducts) {
     <thead>
       <tr>
         <th style="width: 140px;">Indicador</th>
-        ${activeProducts.map((p, idx) => `
+        ${activeProducts.map(p => `
           <th>
             <div style="display: flex; align-items: center; gap: 4px;">
-              <span class="badge" style="background: #1e293b; color: #fff;">Slot ${p.id}</span>
+              <span class="badge" style="background: #1e293b; color: #fff;">Slot ${p.id}${p.id === 1 ? ' (Base)' : ''}</span>
               <span style="max-width: 100px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${p.platform}</span>
             </div>
           </th>
@@ -304,12 +404,12 @@ function renderFinancialMatrix(activeProducts) {
         }).join('')}
       </tr>
       <tr>
-        <td style="font-weight: 600; color: #94a3b8;">Diferença vs Mais Barato</td>
+        <td style="font-weight: 600; color: #94a3b8;">Diferença vs Menor</td>
         ${activeProducts.map(p => {
           const total = (p.price || 0) + (p.shipping || 0);
           const diff = total - minTotal;
           const percent = minTotal > 0 ? Math.round((diff / minTotal) * 100) : 0;
-          if (diff === 0) return `<td style="color: #34d399; font-weight: 600;">Referência (Menor Preço)</td>`;
+          if (diff === 0) return `<td style="color: #34d399; font-weight: 600;">Referência (0%)</td>`;
           return `<td style="color: #f43f5e; font-family: monospace;">+ ${formatCurrency(diff)} (+${percent}%)</td>`;
         }).join('')}
       </tr>
@@ -318,110 +418,76 @@ function renderFinancialMatrix(activeProducts) {
   table.innerHTML = html;
 }
 
-// Render Canonical Specifications Matrix
-function renderSpecMatrix(activeProducts) {
+// Render Dynamic Spec Matrix with Slot 1 as parameter
+function renderDynamicSpecMatrix(aiResult, activeProducts) {
   const table = document.getElementById('specMatrixTable');
 
-  // Collect and normalize all unique spec keys across all active products
-  const keyMap = new Map(); // canonicalKey -> { label, values: [valSlot0, valSlot1, ...] }
-
-  // 1. Check Canonical specs
-  CANONICAL_SPECS.forEach(spec => {
-    let foundInAny = false;
-    const rowValues = activeProducts.map(prod => {
-      const specsObj = prod.specs || {};
-      for (const [rawK, rawV] of Object.entries(specsObj)) {
-        if (spec.synonyms.some(s => rawK.toLowerCase().includes(s))) {
-          foundInAny = true;
-          return rawV;
-        }
-      }
-      return '—';
-    });
-
-    if (foundInAny) {
-      keyMap.set(spec.key, {
-        label: spec.label,
-        values: rowValues,
-      });
-    }
-  });
-
-  // 2. Discover remaining raw custom specs
-  activeProducts.forEach((prod, pIdx) => {
-    const specsObj = prod.specs || {};
-    for (const [rawK, rawV] of Object.entries(specsObj)) {
-      // Check if already covered
-      const isCovered = CANONICAL_SPECS.some(cs =>
-        cs.synonyms.some(s => rawK.toLowerCase().includes(s))
-      );
-
-      if (!isCovered && !keyMap.has(rawK.toLowerCase())) {
-        const rowValues = activeProducts.map((p, idx) => {
-          if (idx === pIdx) return rawV;
-          // check if other product has same key
-          for (const [k, v] of Object.entries(p.specs || {})) {
-            if (k.toLowerCase() === rawK.toLowerCase()) return v;
-          }
-          return '—';
-        });
-
-        keyMap.set(rawK.toLowerCase(), {
-          label: rawK,
-          values: rowValues,
-        });
-      }
-    }
-  });
-
-  // Build HTML Table
   let html = `
     <thead>
       <tr>
-        <th style="width: 140px;">Especificação Canónica</th>
-        ${activeProducts.map(p => `
-          <th>
-            <div style="font-weight: 700; color: #38bdf8;">Slot ${p.id}</div>
-            <div style="font-size: 10px; color: #94a3b8; font-weight: normal; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px;">${p.title}</div>
-          </th>
-        `).join('')}
+        <th style="width: 140px;">Atributo Normalizado</th>
+        <th style="color: #38bdf8; background: #0c1524;">
+          <div>Slot 1 (Base Referência)</div>
+          <div style="font-size: 10px; color: #94a3b8; font-weight: normal; truncate">${currentSlots[0]?.title || 'Slot 1'}</div>
+        </th>
+        ${currentSlots.slice(1).map((s, idx) => {
+          if (!s) return '';
+          return `
+            <th>
+              <div>Slot ${idx + 2}</div>
+              <div style="font-size: 10px; color: #94a3b8; font-weight: normal; truncate">${s.title}</div>
+            </th>
+          `;
+        }).join('')}
       </tr>
     </thead>
     <tbody>
   `;
 
-  if (keyMap.size === 0) {
+  if (!aiResult || aiResult.comparison_matrix.length === 0) {
     html += `
       <tr>
         <td colspan="${activeProducts.length + 1}" style="text-align: center; color: #64748b; padding: 20px;">
-          Nenhuma especificação estruturada encontrada nos anúncios capturados.
+          Nenhum atributo extraído dos anúncios.
         </td>
       </tr>
     `;
   } else {
-    for (const [key, data] of keyMap.entries()) {
-      // Check disparity (if values are different and not all '—')
-      const filledValues = data.values.filter(v => v !== '—');
-      const uniqueFilled = new Set(filledValues.map(v => v.toLowerCase().trim()));
-      const hasDisparity = uniqueFilled.size > 1;
-
+    aiResult.comparison_matrix.forEach(row => {
       html += `
-        <tr class="spec-row ${hasDisparity ? 'disparity-row' : ''}">
+        <tr class="spec-row">
           <td style="font-weight: 600; color: #f1f5f9; background: #0f172a;">
-            ${data.label}
-            ${hasDisparity ? `<span style="font-size: 9px; color: #f59e0b; display: block; font-weight: normal;">⚡ Disparidade</span>` : ''}
+            ${row.attribute_name}
           </td>
-          ${data.values.map(val => {
-            const isMissing = val === '—';
+          <td style="font-family: monospace; color: #67e8f9; background: rgba(6, 182, 212, 0.08); font-weight: 600;">
+            ${row.slot_1_value}
+          </td>
+          ${currentSlots.slice(1).map((s, idx) => {
+            if (!s) return '';
+            const slotNum = idx + 2;
+            const comp = row.comparisons[`slot_${slotNum}`];
+
+            if (!comp) return `<td>—</td>`;
+
+            let badgeHtml = '';
+            if (comp.status === 'equal') {
+              badgeHtml = `<div style="font-size: 9px; color: #34d399; font-weight: 700; margin-top: 2px;">[Idêntico]</div>`;
+            } else if (comp.status === 'divergent') {
+              badgeHtml = `<div style="font-size: 9px; color: #f59e0b; font-weight: 700; margin-top: 2px;">[Divergência]</div>`;
+            } else {
+              badgeHtml = `<div style="font-size: 9px; color: #64748b; margin-top: 2px;">[Não informado]</div>`;
+            }
+
             return `
-              <td class="${hasDisparity && !isMissing ? 'disparity-cell' : ''}" style="${isMissing ? 'color: #475569; text-align: center;' : 'color: #cbd5e1; font-family: monospace;'}">
-                ${val}
+              <td class="${comp.status === 'divergent' ? 'disparity-cell' : ''}" style="font-family: monospace;">
+                <div>${comp.value}</div>
+                ${badgeHtml}
               </td>
             `;
           }).join('')}
         </tr>
       `;
-    }
+    });
   }
 
   html += `</tbody>`;
@@ -438,29 +504,16 @@ function filterSpecMatrix(query) {
 }
 
 // Render Executive Verdict
-function renderExecutiveVerdict(activeProducts) {
+function renderExecutiveVerdict(aiResult, activeProducts) {
   const container = document.getElementById('verdictContent');
-  let minTotal = Infinity;
-  let cheapestProduct = activeProducts[0];
-
-  activeProducts.forEach(p => {
-    const total = (p.price || 0) + (p.shipping || 0);
-    if (total < minTotal) {
-      minTotal = total;
-      cheapestProduct = p;
-    }
-  });
-
-  const maxTotal = Math.max(...activeProducts.map(p => (p.price || 0) + (p.shipping || 0)));
-  const savings = maxTotal - minTotal;
+  if (!aiResult) return;
 
   container.innerHTML = `
-    <div style="margin-bottom: 6px;">
-      🏆 <strong>Opção Mais Económica:</strong> Slot ${cheapestProduct.id} (${cheapestProduct.platform}) por <strong>${formatCurrency(minTotal)}</strong>.
+    <div style="margin-bottom: 6px; font-weight: 600; color: #f8fafc;">
+      🏷️ <strong>Categoria Inferida pela IA:</strong> ${aiResult.detected_category}
     </div>
-    <div style="color: #94a3b8; font-size: 11px;">
-      - Economia máxima potencial de <strong>${formatCurrency(savings)}</strong> em relação à opção mais cara da lista.<br>
-      - Compare as linhas destacadas com <span style="color: #f59e0b;">⚡ Disparidade</span> para verificar se o produto mais caro oferece ganho técnico que justifique o valor adicional.
+    <div style="color: #cbd5e1; font-size: 12px; line-height: 1.5;">
+      ${aiResult.executive_summary}
     </div>
   `;
 }
@@ -468,15 +521,28 @@ function renderExecutiveVerdict(activeProducts) {
 // Copy Comparison Report
 function copyComparisonReport() {
   const activeProducts = currentSlots.filter(s => s !== null);
-  if (activeProducts.length < 2) return;
+  if (activeProducts.length < 2 || !currentAIResult) return;
 
-  let report = `📊 *AUTOCOMPARE MULTI-MARKETPLACE (5 SLOTS)*\n`;
+  let report = `📊 *AUTOCOMPARE MULTI-MARKETPLACE (EXTRAÇÃO DINÂMICA IA)*\n`;
+  report += `🏷️ *Categoria:* ${currentAIResult.detected_category}\n`;
   report += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
   activeProducts.forEach(p => {
     const total = (p.price || 0) + (p.shipping || 0);
     report += `📦 *Slot ${p.id} (${p.platform}):* ${p.title}\n`;
     report += `💰 *Total:* ${formatCurrency(total)} (Base: ${formatCurrency(p.price)} | Frete: ${formatCurrency(p.shipping)})\n`;
-    report += `🔗 ${p.url}\n\n`;
+  });
+  report += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+  report += `⚖️ *VEREDITO DA IA:*\n${currentAIResult.executive_summary}\n\n`;
+  report += `🔍 *CONFRONTO TÉCNICO (BASE: SLOT 1):*\n`;
+  currentAIResult.comparison_matrix.forEach(row => {
+    report += `• *${row.attribute_name}:* Slot 1 = "${row.slot_1_value}"`;
+    for (let i = 2; i <= 5; i++) {
+      const comp = row.comparisons[`slot_${i}`];
+      if (comp && currentSlots[i - 1]) {
+        report += ` | Slot ${i} = "${comp.value}" [${comp.status}]`;
+      }
+    }
+    report += `\n`;
   });
   report += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
   report += `Gerado via AutoCompare Chrome Extension`;
@@ -486,7 +552,7 @@ function copyComparisonReport() {
   });
 }
 
-// Helper: Show banner status
+// Show banner status
 function showStatus(message, type = 'info') {
   const el = document.getElementById('statusMessage');
   el.style.display = 'block';

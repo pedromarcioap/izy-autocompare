@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { SlotsState, SimulatedTab, ProductSlot } from './types/extension';
-import { SIMULATED_TABS } from './data/simulatedTabs';
+import { CATEGORY_PRESETS, SIMULATED_TABS } from './data/simulatedTabs';
 import { BrowserEmulator } from './components/BrowserEmulator';
 import { SidePanelSimulator } from './components/SidePanelSimulator';
 import { ExtensionFilesViewer } from './components/ExtensionFilesViewer';
@@ -9,45 +9,85 @@ import {
   Layers,
   FileCode,
   Sparkles,
-  Download,
-  ShieldCheck,
-  CheckCircle2,
   RefreshCw,
+  FolderTree,
+  Cpu,
 } from 'lucide-react';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<'simulator' | 'files'>('simulator');
-  const [tabs, setTabs] = useState<SimulatedTab[]>(SIMULATED_TABS);
-  const [activeTabId, setActiveTabId] = useState<string>(SIMULATED_TABS[0].id);
+  const [selectedCategoryPreset, setSelectedCategoryPreset] = useState<string>(CATEGORY_PRESETS[0].id);
+  const [tabs, setTabs] = useState<SimulatedTab[]>(CATEGORY_PRESETS[0].tabs);
+  const [activeTabId, setActiveTabId] = useState<string>(CATEGORY_PRESETS[0].tabs[0].id);
 
-  // Initialize slots with 2 pre-captured products for instant visualization
+  // Initialize slots with 2 pre-captured products from initial category (Ferramentas Elétricas)
   const [slots, setSlots] = useState<SlotsState>([
     {
       id: 1,
-      platform: SIMULATED_TABS[0].platform,
-      title: SIMULATED_TABS[0].title,
-      price: SIMULATED_TABS[0].price,
-      shipping: SIMULATED_TABS[0].shipping,
-      image: SIMULATED_TABS[0].image,
-      specs: SIMULATED_TABS[0].specs,
-      url: SIMULATED_TABS[0].url,
+      platform: CATEGORY_PRESETS[0].tabs[0].platform,
+      title: CATEGORY_PRESETS[0].tabs[0].title,
+      price: CATEGORY_PRESETS[0].tabs[0].price,
+      shipping: CATEGORY_PRESETS[0].tabs[0].shipping,
+      image: CATEGORY_PRESETS[0].tabs[0].image,
+      specs: CATEGORY_PRESETS[0].tabs[0].specs,
+      url: CATEGORY_PRESETS[0].tabs[0].url,
       capturedAt: new Date().toLocaleTimeString(),
     },
     {
       id: 2,
-      platform: SIMULATED_TABS[1].platform,
-      title: SIMULATED_TABS[1].title,
-      price: SIMULATED_TABS[1].price,
-      shipping: SIMULATED_TABS[1].shipping,
-      image: SIMULATED_TABS[1].image,
-      specs: SIMULATED_TABS[1].specs,
-      url: SIMULATED_TABS[1].url,
+      platform: CATEGORY_PRESETS[0].tabs[1].platform,
+      title: CATEGORY_PRESETS[0].tabs[1].title,
+      price: CATEGORY_PRESETS[0].tabs[1].price,
+      shipping: CATEGORY_PRESETS[0].tabs[1].shipping,
+      image: CATEGORY_PRESETS[0].tabs[1].image,
+      specs: CATEGORY_PRESETS[0].tabs[1].specs,
+      url: CATEGORY_PRESETS[0].tabs[1].url,
       capturedAt: new Date().toLocaleTimeString(),
     },
     null,
     null,
     null,
   ]);
+
+  // Handle switching category benchmark
+  const handleSelectCategory = (categoryId: string) => {
+    const preset = CATEGORY_PRESETS.find(p => p.id === categoryId);
+    if (!preset) return;
+
+    setSelectedCategoryPreset(categoryId);
+    setTabs(preset.tabs);
+    setActiveTabId(preset.tabs[0].id);
+
+    // Populate slots with the first 2 or all tabs from the category
+    const initialSlots: SlotsState = [
+      {
+        id: 1,
+        platform: preset.tabs[0].platform,
+        title: preset.tabs[0].title,
+        price: preset.tabs[0].price,
+        shipping: preset.tabs[0].shipping,
+        image: preset.tabs[0].image,
+        specs: preset.tabs[0].specs,
+        url: preset.tabs[0].url,
+        capturedAt: new Date().toLocaleTimeString(),
+      },
+      {
+        id: 2,
+        platform: preset.tabs[1].platform,
+        title: preset.tabs[1].title,
+        price: preset.tabs[1].price,
+        shipping: preset.tabs[1].shipping,
+        image: preset.tabs[1].image,
+        specs: preset.tabs[1].specs,
+        url: preset.tabs[1].url,
+        capturedAt: new Date().toLocaleTimeString(),
+      },
+      null,
+      null,
+      null,
+    ];
+    setSlots(initialSlots);
+  };
 
   // Capture current tab to first free slot
   const handleCaptureToFreeSlot = () => {
@@ -81,8 +121,8 @@ export default function App() {
     });
   };
 
-  // Fill all 5 slots at once for instant testing
-  const handleFillAll5Slots = () => {
+  // Fill all slots with the current category tabs
+  const handleFillAllCategorySlots = () => {
     const newSlots: SlotsState = tabs.slice(0, 5).map((tab, idx) => ({
       id: idx + 1,
       platform: tab.platform,
@@ -130,27 +170,19 @@ export default function App() {
                 <h1 className="text-base sm:text-lg font-bold tracking-tight text-white">
                   AutoCompare Multi-Marketplace
                 </h1>
-                <span className="px-2 py-0.5 text-[10px] font-mono font-bold uppercase rounded bg-cyan-950 text-cyan-300 border border-cyan-800/50">
-                  Chrome Extension • 5 Slots
+                <span className="px-2 py-0.5 text-[10px] font-mono font-bold uppercase rounded bg-cyan-950 text-cyan-300 border border-cyan-800/50 flex items-center gap-1">
+                  <Cpu className="w-3 h-3" />
+                  IA Agnóstica (5 Slots)
                 </span>
               </div>
               <p className="text-xs text-slate-400 hidden sm:block">
-                Captura e comparação simultânea de até 5 produtos da Shopee e AliExpress
+                Extração e alinhamento dinâmico sem categorias pré-fixadas (Base: Slot 1)
               </p>
             </div>
           </div>
 
-          {/* Mode Switcher & Quick Demo */}
+          {/* Mode Switcher */}
           <div className="flex items-center gap-2">
-            <button
-              onClick={handleFillAll5Slots}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-950/60 hover:bg-emerald-900/60 text-xs font-semibold text-emerald-300 border border-emerald-800/50 transition-colors shadow-sm"
-              title="Preencher todos os 5 slots com dados de teste"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="hidden sm:inline">Preencher Todos os 5 Slots</span>
-            </button>
-
             <div className="flex items-center p-1 bg-slate-900 border border-slate-800 rounded-xl">
               <button
                 onClick={() => setCurrentView('simulator')}
@@ -173,19 +205,60 @@ export default function App() {
                 }`}
               >
                 <FileCode className="w-3.5 h-3.5" />
-                <span>Arquivos da Extensão</span>
+                <span>Arquivos Manifest V3</span>
               </button>
             </div>
           </div>
         </div>
       </header>
 
+      {/* Category Benchmark Switcher Bar */}
+      {currentView === 'simulator' && (
+        <div className="bg-slate-900/80 border-b border-slate-800/80 px-4 py-2.5">
+          <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-cyan-400 shrink-0" />
+              <span className="font-semibold text-slate-300">
+                Testar Universalidade da IA em Qualquer Nicho:
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              {CATEGORY_PRESETS.map(preset => {
+                const isActive = preset.id === selectedCategoryPreset;
+                return (
+                  <button
+                    key={preset.id}
+                    onClick={() => handleSelectCategory(preset.id)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                      isActive
+                        ? 'bg-cyan-500/20 text-cyan-200 border-cyan-500/60 font-bold ring-1 ring-cyan-500/30'
+                        : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700 hover:text-white'
+                    }`}
+                  >
+                    {preset.name}
+                  </button>
+                );
+              })}
+
+              <button
+                onClick={handleFillAllCategorySlots}
+                className="ml-2 px-3 py-1.5 rounded-lg bg-emerald-950/70 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-800/60 font-semibold text-xs flex items-center gap-1 shadow-sm"
+                title="Capturar todos os produtos deste nicho para os 5 slots"
+              >
+                <span>Preencher 5 Slots</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main View Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
         {currentView === 'simulator' ? (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* Left: Browser Emulator with 5 Simulated Tabs */}
-            <div className="lg:col-span-5 h-[820px]">
+            {/* Left: Browser Emulator with Real Shopee & AliExpress Tabs */}
+            <div className="lg:col-span-5 h-[840px]">
               <BrowserEmulator
                 tabs={tabs}
                 activeTabId={activeTabId}
@@ -203,8 +276,8 @@ export default function App() {
               />
             </div>
 
-            {/* Right: The 5-Slot SidePanel */}
-            <div className="lg:col-span-7 h-[820px]">
+            {/* Right: The 5-Slot Dynamic AI SidePanel */}
+            <div className="lg:col-span-7 h-[840px]">
               <SidePanelSimulator
                 slots={slots}
                 onCaptureToFreeSlot={handleCaptureToFreeSlot}
@@ -227,7 +300,9 @@ export default function App() {
       <footer className="border-t border-slate-900 bg-slate-950 py-5 text-center text-xs text-slate-500">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <span>AutoCompare Multi-Marketplace v3.0 (Manifest V3)</span>
-          <span className="font-mono text-slate-400">Suporte a até 5 Slots Simultâneos • Shopee & AliExpress</span>
+          <span className="font-mono text-slate-400">
+            Extração Dinâmica Multimodal de IA • Confronto com Base no Slot 1
+          </span>
         </div>
       </footer>
     </div>

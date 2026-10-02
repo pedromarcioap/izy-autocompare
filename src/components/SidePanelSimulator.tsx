@@ -1,18 +1,20 @@
-import React, { useState, useMemo } from 'react';
-import { SlotsState, ProductSlot } from '../types/extension';
+import React, { useState, useEffect, useMemo } from 'react';
+import { SlotsState, ProductSlot, DynamicComparisonResult, ComparisonStatus } from '../types/extension';
+import { performAIAudit } from '../services/aiAuditService';
 import {
   Zap,
   Trash2,
-  Download,
   Copy,
   CheckCheck,
   Search,
   CheckCircle2,
   AlertTriangle,
+  HelpCircle,
   Award,
-  Layers,
-  Scale,
+  Sparkles,
   RefreshCw,
+  Cpu,
+  Layers,
 } from 'lucide-react';
 
 interface SidePanelSimulatorProps {
@@ -23,23 +25,6 @@ interface SidePanelSimulatorProps {
   onClearAllSlots: () => void;
 }
 
-const CANONICAL_SPECS = [
-  { key: 'bluetooth', label: 'Bluetooth / Conexão', synonyms: ['bluetooth', 'versão bluetooth', 'conexão', 'conexão sem fio', 'bt'] },
-  { key: 'battery', label: 'Bateria & Capacidade', synonyms: ['bateria', 'capacidade', 'capacidade da bateria', 'mah', 'bateria do fone', 'bateria da case'] },
-  { key: 'autonomy', label: 'Autonomia / Duração', synonyms: ['autonomia', 'duração da bateria', 'tempo de reprodução', 'tempo de uso', 'autonomia total'] },
-  { key: 'power', label: 'Potência / Carregamento', synonyms: ['potência', 'potência máxima', 'watts', 'saída', 'carregamento', 'fast charge', 'entrada de carga', 'conector de carregamento'] },
-  { key: 'anc', label: 'Cancelamento de Ruído (ANC)', synonyms: ['cancelamento de ruído', 'cancelamento ativo', 'anc', 'redução de ruído'] },
-  { key: 'waterproof', label: 'Proteção / Resistência à Água', synonyms: ['resistência à água', 'proteção contra água', 'ipx', 'ip67', 'ip68', 'ipx4', 'ipx5', 'impermeável'] },
-  { key: 'audio_driver', label: 'Driver de Som / Alto-falante', synonyms: ['driver', 'drivers', 'alto-falante', 'tamanho do driver', 'diafragma', 'drivers de som'] },
-  { key: 'mic', label: 'Microfone & Chamadas', synonyms: ['microfone', 'microfones', 'enc', 'chamadas'] },
-  { key: 'display', label: 'Tela & Display', synonyms: ['tela', 'display', 'tipo de tela', 'resolução', 'painel'] },
-  { key: 'material', label: 'Material & Acabamento', synonyms: ['material', 'material do corpo', 'acabamento', 'estrutura'] },
-  { key: 'weight', label: 'Peso', synonyms: ['peso', 'peso do produto', 'peso do fone', 'peso total'] },
-  { key: 'dimensions', label: 'Dimensões / Tamanho', synonyms: ['dimensões', 'tamanho', 'medidas'] },
-  { key: 'app', label: 'Suporte a Aplicativo', synonyms: ['aplicativo', 'app dedicado', 'suporte a aplicativo', 'app', 'software'] },
-  { key: 'warranty', label: 'Garantia', synonyms: ['garantia', 'garantia do fabricante', 'garantia do vendedor'] },
-];
-
 export const SidePanelSimulator: React.FC<SidePanelSimulatorProps> = ({
   slots,
   onCaptureToFreeSlot,
@@ -48,7 +33,10 @@ export const SidePanelSimulator: React.FC<SidePanelSimulatorProps> = ({
   onClearAllSlots,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'divergent' | 'equal' | 'missing'>('all');
   const [copied, setCopied] = useState(false);
+  const [isAuditing, setIsAuditing] = useState(false);
+  const [aiResult, setAiResult] = useState<DynamicComparisonResult | null>(null);
 
   const activeProducts = useMemo(
     () => slots.filter((s): s is ProductSlot => s !== null),
@@ -58,6 +46,27 @@ export const SidePanelSimulator: React.FC<SidePanelSimulatorProps> = ({
 
   const formatCurrency = (val: number) =>
     val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+  // Run AI Audit whenever active products change
+  const triggerAIAudit = async () => {
+    if (activeCount < 2) {
+      setAiResult(null);
+      return;
+    }
+    setIsAuditing(true);
+    try {
+      const res = await performAIAudit(slots);
+      setAiResult(res);
+    } catch (e) {
+      console.error('Audit failed:', e);
+    } finally {
+      setIsAuditing(false);
+    }
+  };
+
+  useEffect(() => {
+    triggerAIAudit();
+  }, [slots]);
 
   // Financial calculations
   const minTotal = useMemo(() => {
@@ -69,107 +78,87 @@ export const SidePanelSimulator: React.FC<SidePanelSimulatorProps> = ({
     return activeProducts.find(p => (p.price || 0) + (p.shipping || 0) === minTotal);
   }, [activeProducts, minTotal]);
 
-  // Canonical spec matrix extraction
-  const specMatrix = useMemo(() => {
-    if (activeProducts.length === 0) return [];
-
-    const result: Array<{
-      key: string;
-      label: string;
-      values: string[];
-      hasDisparity: boolean;
-    }> = [];
-
-    // 1. Process Canonical Specs
-    CANONICAL_SPECS.forEach(specDef => {
-      let foundInAny = false;
-      const rowValues = activeProducts.map(prod => {
-        const specsObj = prod.specs || {};
-        for (const [rawK, rawV] of Object.entries(specsObj)) {
-          if (specDef.synonyms.some(s => rawK.toLowerCase().includes(s))) {
-            foundInAny = true;
-            return rawV;
-          }
-        }
-        return '—';
-      });
-
-      if (foundInAny) {
-        const filled = rowValues.filter(v => v !== '—');
-        const uniqueFilled = new Set(filled.map(v => v.toLowerCase().trim()));
-        const hasDisparity = uniqueFilled.size > 1;
-
-        result.push({
-          key: specDef.key,
-          label: specDef.label,
-          values: rowValues,
-          hasDisparity,
-        });
-      }
-    });
-
-    // 2. Discover Custom Raw Specs
-    activeProducts.forEach((prod, pIdx) => {
-      const specsObj = prod.specs || {};
-      for (const [rawK, rawV] of Object.entries(specsObj)) {
-        const isCovered = CANONICAL_SPECS.some(cs =>
-          cs.synonyms.some(s => rawK.toLowerCase().includes(s))
+  // Filtered rows
+  const filteredRows = useMemo(() => {
+    if (!aiResult) return [];
+    return aiResult.comparison_matrix.filter(row => {
+      // Query search
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchesName = row.attribute_name.toLowerCase().includes(q);
+        const matchesS1 = row.slot_1_value.toLowerCase().includes(q);
+        const matchesOther = Object.values(row.comparisons).some(c =>
+          c?.value.toLowerCase().includes(q)
         );
-        const alreadyAdded = result.some(
-          r => r.label.toLowerCase() === rawK.toLowerCase()
-        );
-
-        if (!isCovered && !alreadyAdded) {
-          const rowValues = activeProducts.map((p, idx) => {
-            if (idx === pIdx) return rawV;
-            for (const [k, v] of Object.entries(p.specs || {})) {
-              if (k.toLowerCase() === rawK.toLowerCase()) return v;
-            }
-            return '—';
-          });
-
-          const filled = rowValues.filter(v => v !== '—');
-          const uniqueFilled = new Set(filled.map(v => v.toLowerCase().trim()));
-          const hasDisparity = uniqueFilled.size > 1;
-
-          result.push({
-            key: rawK.toLowerCase().replace(/\s+/g, '_'),
-            label: rawK,
-            values: rowValues,
-            hasDisparity,
-          });
-        }
+        if (!matchesName && !matchesS1 && !matchesOther) return false;
       }
+
+      // Status filter
+      if (statusFilter !== 'all') {
+        const hasStatus = Object.values(row.comparisons).some(
+          c => c?.status === statusFilter
+        );
+        if (!hasStatus) return false;
+      }
+
+      return true;
     });
+  }, [aiResult, searchQuery, statusFilter]);
 
-    return result;
-  }, [activeProducts]);
-
-  // Filtered spec matrix
-  const filteredSpecs = useMemo(() => {
-    if (!searchQuery.trim()) return specMatrix;
-    const query = searchQuery.toLowerCase();
-    return specMatrix.filter(
-      item =>
-        item.label.toLowerCase().includes(query) ||
-        item.values.some(v => v.toLowerCase().includes(query))
-    );
-  }, [specMatrix, searchQuery]);
+  // Status Badge Renderer
+  const renderStatusBadge = (status: ComparisonStatus) => {
+    switch (status) {
+      case 'equal':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-500/40">
+            <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+            [Idêntico]
+          </span>
+        );
+      case 'divergent':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-amber-950/80 text-amber-300 border border-amber-500/40">
+            <AlertTriangle className="w-3 h-3 text-amber-400" />
+            [Divergência]
+          </span>
+        );
+      case 'missing':
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-800/80 text-slate-400 border border-slate-700">
+            <HelpCircle className="w-3 h-3 text-slate-500" />
+            [Não informado]
+          </span>
+        );
+    }
+  };
 
   // Copy Full Comparison Report
   const handleCopyReport = () => {
-    if (activeProducts.length < 2) return;
+    if (activeProducts.length < 2 || !aiResult) return;
 
-    let report = `📊 *AUTOCOMPARE MULTI-MARKETPLACE (5 SLOTS)*\n`;
+    let report = `📊 *AUTOCOMPARE MULTI-MARKETPLACE (AUDITORIA IA)*\n`;
+    report += `🏷️ *Categoria Detectada:* ${aiResult.detected_category}\n`;
     report += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
     activeProducts.forEach(p => {
       const total = (p.price || 0) + (p.shipping || 0);
       report += `📦 *Slot ${p.id} (${p.platform}):* ${p.title}\n`;
       report += `💰 *Total:* ${formatCurrency(total)} (Base: ${formatCurrency(p.price)} | Frete: ${formatCurrency(p.shipping)})\n`;
-      report += `🔗 ${p.url}\n\n`;
     });
     report += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-    report += `🏆 *MENOR PREÇO:* Slot ${cheapestProduct?.id} (${cheapestProduct?.platform}) por ${formatCurrency(minTotal)}\n`;
+    report += `⚖️ *VEREDITO EXECUTIVO:*\n${aiResult.executive_summary}\n\n`;
+    report += `🔍 *MATRIZ DE CONFRONTO TÉCNICO (BASE: SLOT 1):*\n`;
+    aiResult.comparison_matrix.forEach(row => {
+      report += `• *${row.attribute_name}:* Slot 1 = "${row.slot_1_value}"`;
+      for (let i = 2; i <= 5; i++) {
+        const comp = row.comparisons[`slot_${i}`];
+        if (comp && slots[i - 1]) {
+          report += ` | Slot ${i} = "${comp.value}" [${comp.status}]`;
+        }
+      }
+      report += `\n`;
+    });
+    report += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
     report += `Gerado via AutoCompare Chrome Extension`;
 
     navigator.clipboard.writeText(report);
@@ -189,23 +178,37 @@ export const SidePanelSimulator: React.FC<SidePanelSimulatorProps> = ({
             <div>
               <div className="flex items-center gap-1.5">
                 <h3 className="text-sm font-extrabold text-white tracking-tight">AutoCompare</h3>
-                <span className="text-[10px] font-mono bg-cyan-950 text-cyan-300 px-1.5 py-0.5 rounded border border-cyan-800/50">
-                  SidePanel v3.0
+                <span className="text-[10px] font-mono bg-cyan-950 text-cyan-300 px-1.5 py-0.5 rounded border border-cyan-800/50 flex items-center gap-1">
+                  <Cpu className="w-3 h-3" />
+                  IA Dinâmica
                 </span>
               </div>
-              <p className="text-[11px] text-slate-400 font-mono">5-SLOT MULTI-MARKETPLACE</p>
+              <p className="text-[11px] text-slate-400 font-mono">EXTRAÇÃO UNIVERSAL & AGNÓSTICA</p>
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={onClearAllSlots}
-            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 text-rose-400 hover:bg-rose-950/40 hover:text-rose-300 border border-slate-700 hover:border-rose-700/50 transition-colors"
-            title="Limpar todos os 5 slots"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            <span>Limpar Todos</span>
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={triggerAIAudit}
+              disabled={isAuditing || activeCount < 2}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg bg-cyan-950/70 text-cyan-300 hover:bg-cyan-900/80 border border-cyan-800/50 transition-colors disabled:opacity-40"
+              title="Re-auditar atributos com IA"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isAuditing ? 'animate-spin text-cyan-400' : ''}`} />
+              <span className="hidden sm:inline">{isAuditing ? 'Processando...' : 'Re-auditar IA'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onClearAllSlots}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 text-rose-400 hover:bg-rose-950/40 hover:text-rose-300 border border-slate-700 hover:border-rose-700/50 transition-colors"
+              title="Limpar todos os 5 slots"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Limpar</span>
+            </button>
+          </div>
         </div>
 
         {/* Master Capture Button */}
@@ -257,11 +260,16 @@ export const SidePanelSimulator: React.FC<SidePanelSimulatorProps> = ({
               if (slot) {
                 const isShopee = slot.platform === 'Shopee';
                 const total = (slot.price || 0) + (slot.shipping || 0);
+                const isBaseSlot = idx === 0;
 
                 return (
                   <div
                     key={idx}
-                    className="relative bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl p-3 flex flex-col justify-between gap-2 shadow-md transition-all group"
+                    className={`relative bg-slate-900 rounded-xl p-3 flex flex-col justify-between gap-2 shadow-md transition-all border ${
+                      isBaseSlot
+                        ? 'border-cyan-500/50 ring-1 ring-cyan-500/20 bg-gradient-to-b from-cyan-950/20 to-slate-900'
+                        : 'border-slate-800 hover:border-slate-700'
+                    }`}
                   >
                     <div>
                       <div className="flex items-center justify-between mb-1.5">
@@ -273,6 +281,7 @@ export const SidePanelSimulator: React.FC<SidePanelSimulatorProps> = ({
                           }`}
                         >
                           Slot {idx + 1} • {slot.platform}
+                          {isBaseSlot && ' (Base)'}
                         </span>
                         <button
                           type="button"
@@ -331,7 +340,7 @@ export const SidePanelSimulator: React.FC<SidePanelSimulatorProps> = ({
                   className="bg-slate-950/60 border border-dashed border-slate-800 hover:border-slate-700 rounded-xl p-3 flex flex-col items-center justify-center text-center gap-1.5 transition-all"
                 >
                   <span className="text-[10px] font-mono font-bold text-slate-500 uppercase">
-                    Slot {idx + 1} Livre
+                    Slot {idx + 1} Livre {idx === 0 && '(Base)'}
                   </span>
                   <button
                     type="button"
@@ -349,14 +358,32 @@ export const SidePanelSimulator: React.FC<SidePanelSimulatorProps> = ({
         {/* Comparison Section (Rendered when >= 2 slots active) */}
         {activeCount >= 2 ? (
           <div className="space-y-5 pt-2">
+            {/* Dynamic Inferred Category Banner */}
+            {aiResult && (
+              <div className="p-3 bg-gradient-to-r from-cyan-950/70 via-slate-900 to-cyan-950/70 border border-cyan-800/40 rounded-xl flex items-center justify-between gap-3 shadow-md">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-cyan-400 shrink-0" />
+                  <span className="text-xs text-slate-300">
+                    <strong className="text-white">Categoria Detectada pela IA:</strong>{' '}
+                    <span className="text-cyan-300 font-semibold font-mono bg-cyan-950 px-2 py-0.5 rounded border border-cyan-800/50">
+                      {aiResult.detected_category}
+                    </span>
+                  </span>
+                </div>
+                <span className="text-[11px] text-slate-400 font-mono hidden sm:inline">
+                  Extração 100% Dinâmica & Agnóstica
+                </span>
+              </div>
+            )}
+
             {/* Block 1: Financial Matrix */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <h4 className="text-xs font-bold font-mono text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
-                  <span>💰 Matriz Financeira Comparativa ({activeCount} Produtos)</span>
+                  <span>💰 Matriz Financeira ({activeCount} Produtos)</span>
                 </h4>
                 <span className="text-[11px] text-emerald-400 font-semibold">
-                  ★ Melhor Preço: Slot {cheapestProduct?.id} ({formatCurrency(minTotal)})
+                  ★ Menor Desembolso: Slot {cheapestProduct?.id} ({formatCurrency(minTotal)})
                 </span>
               </div>
 
@@ -370,6 +397,7 @@ export const SidePanelSimulator: React.FC<SidePanelSimulatorProps> = ({
                           <div className="flex items-center gap-1.5">
                             <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-200 text-[10px]">
                               Slot {p.id}
+                              {p.id === 1 && ' (Base)'}
                             </span>
                             <span className="truncate max-w-[80px]">{p.platform}</span>
                           </div>
@@ -454,23 +482,61 @@ export const SidePanelSimulator: React.FC<SidePanelSimulatorProps> = ({
               </div>
             </div>
 
-            {/* Block 2: Canonical Specifications Matrix */}
+            {/* Block 2: Dynamic Confrontation Matrix (Slot 1 as Parameter) */}
             <div className="space-y-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <h4 className="text-xs font-bold font-mono text-cyan-400 uppercase tracking-wider flex items-center gap-1.5">
-                  <Layers className="w-3.5 h-3.5" />
-                  <span>Matriz de Especificações Canónicas (Chave a Chave)</span>
-                </h4>
+                <div className="flex items-center gap-2">
+                  <h4 className="text-xs font-bold font-mono text-cyan-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5" />
+                    <span>Confronto Cruzado Dinâmico (Parâmetro: Slot 1)</span>
+                  </h4>
+                </div>
 
-                <div className="relative">
-                  <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
-                    placeholder="Filtrar atributos..."
-                    className="pl-7 pr-2.5 py-1 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500 w-44"
-                  />
+                <div className="flex items-center gap-2">
+                  {/* Status filter tabs */}
+                  <div className="flex items-center gap-1 text-xs">
+                    <button
+                      onClick={() => setStatusFilter('all')}
+                      className={`px-2 py-0.5 rounded text-[11px] transition-all ${
+                        statusFilter === 'all'
+                          ? 'bg-cyan-500 text-slate-950 font-bold'
+                          : 'bg-slate-900 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Todos
+                    </button>
+                    <button
+                      onClick={() => setStatusFilter('divergent')}
+                      className={`px-2 py-0.5 rounded text-[11px] transition-all ${
+                        statusFilter === 'divergent'
+                          ? 'bg-amber-500 text-slate-950 font-bold'
+                          : 'bg-slate-900 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Divergências
+                    </button>
+                    <button
+                      onClick={() => setStatusFilter('equal')}
+                      className={`px-2 py-0.5 rounded text-[11px] transition-all ${
+                        statusFilter === 'equal'
+                          ? 'bg-emerald-500 text-slate-950 font-bold'
+                          : 'bg-slate-900 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Idênticos
+                    </button>
+                  </div>
+
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={e => setSearchQuery(e.target.value)}
+                      placeholder="Buscar atributo..."
+                      className="pl-7 pr-2.5 py-1 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500 w-36"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -479,60 +545,114 @@ export const SidePanelSimulator: React.FC<SidePanelSimulatorProps> = ({
                   <thead className="sticky top-0 z-10">
                     <tr className="bg-slate-950 text-[11px] font-mono uppercase text-slate-400 border-b border-slate-800">
                       <th className="py-2.5 px-3 min-w-[150px] font-semibold bg-slate-950">
-                        Especificação Canónica
+                        Atributo Normalizado
                       </th>
-                      {activeProducts.map(p => (
-                        <th key={p.id} className="py-2.5 px-3 min-w-[130px] font-semibold bg-slate-950">
-                          <div className="font-bold text-cyan-300">Slot {p.id}</div>
-                          <div className="text-[10px] text-slate-500 font-normal truncate max-w-[110px]">
-                            {p.title}
-                          </div>
-                        </th>
-                      ))}
+                      <th className="py-2.5 px-3 min-w-[140px] font-semibold bg-slate-950 text-cyan-300">
+                        <div className="flex items-center gap-1">
+                          <span className="w-2 h-2 rounded-full bg-cyan-400"></span>
+                          <span>Slot 1 (Base Referência)</span>
+                        </div>
+                      </th>
+                      {slots.slice(1).map((s, idx) => {
+                        const slotNum = idx + 2;
+                        if (!s) return null;
+                        return (
+                          <th
+                            key={slotNum}
+                            className="py-2.5 px-3 min-w-[140px] font-semibold bg-slate-950"
+                          >
+                            <div className="font-bold text-slate-200">Slot {slotNum}</div>
+                            <div className="text-[10px] text-slate-500 font-normal truncate max-w-[100px]">
+                              {s.title}
+                            </div>
+                          </th>
+                        );
+                      })}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/80">
-                    {filteredSpecs.length === 0 ? (
+                    {isAuditing ? (
                       <tr>
                         <td
-                          colSpan={activeProducts.length + 1}
+                          colSpan={activeCount + 1}
+                          className="py-12 text-center text-slate-400 text-xs"
+                        >
+                          <RefreshCw className="w-6 h-6 animate-spin mx-auto text-cyan-400 mb-2" />
+                          <p className="font-semibold text-white">
+                            A IA está minerando e normalizando os atributos dos anúncios...
+                          </p>
+                          <p className="text-[11px] text-slate-500 mt-1">
+                            Executando etapas de mineração, fusão semântica e confronto com o Slot 1.
+                          </p>
+                        </td>
+                      </tr>
+                    ) : filteredRows.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={activeCount + 1}
                           className="py-8 text-center text-slate-500 text-xs"
                         >
-                          Nenhuma especificação encontrada para o filtro atual.
+                          Nenhum atributo encontrado para os filtros selecionados.
                         </td>
                       </tr>
                     ) : (
-                      filteredSpecs.map(row => (
-                        <tr
-                          key={row.key}
-                          className={`hover:bg-slate-800/40 transition-colors ${
-                            row.hasDisparity ? 'bg-amber-950/10' : ''
-                          }`}
-                        >
-                          <td className="py-2.5 px-3 font-semibold text-slate-200 bg-slate-950/60">
-                            <div className="flex flex-col">
-                              <span>{row.label}</span>
-                              {row.hasDisparity && (
-                                <span className="text-[9px] text-amber-400 font-mono font-normal">
-                                  ⚡ Disparidade
-                                </span>
-                              )}
-                            </div>
+                      filteredRows.map((row, rIdx) => (
+                        <tr key={rIdx} className="hover:bg-slate-800/40 transition-colors">
+                          {/* Col 1: Attribute Name */}
+                          <td className="py-2.5 px-3 font-semibold text-slate-200 bg-slate-950/60 align-top">
+                            {row.attribute_name}
                           </td>
-                          {row.values.map((val, vIdx) => {
-                            const isMissing = val === '—';
+
+                          {/* Col 2: Slot 1 (Base) */}
+                          <td className="py-2.5 px-3 font-mono text-slate-100 bg-cyan-950/20 border-r border-cyan-900/30 align-top">
+                            <span
+                              className={
+                                row.slot_1_value === 'Não informado'
+                                  ? 'text-slate-500 italic'
+                                  : 'font-semibold text-cyan-200'
+                              }
+                            >
+                              {row.slot_1_value}
+                            </span>
+                          </td>
+
+                          {/* Cols 3 to 6: Slot 2 to 5 Comparisons */}
+                          {slots.slice(1).map((s, idx) => {
+                            const slotNum = idx + 2;
+                            if (!s) return null;
+                            const comp = row.comparisons[`slot_${slotNum}`];
+
+                            if (!comp) {
+                              return (
+                                <td key={slotNum} className="py-2.5 px-3 font-mono text-slate-600 text-center">
+                                  —
+                                </td>
+                              );
+                            }
+
                             return (
                               <td
-                                key={vIdx}
-                                className={`py-2.5 px-3 font-mono leading-relaxed ${
-                                  isMissing
-                                    ? 'text-slate-600 text-center'
-                                    : row.hasDisparity
-                                    ? 'text-amber-200/90 bg-amber-950/15'
-                                    : 'text-slate-200'
+                                key={slotNum}
+                                className={`py-2.5 px-3 font-mono leading-relaxed align-top ${
+                                  comp.status === 'divergent'
+                                    ? 'bg-amber-950/15'
+                                    : comp.status === 'equal'
+                                    ? 'bg-emerald-950/10'
+                                    : ''
                                 }`}
                               >
-                                {val}
+                                <div className="flex flex-col gap-1">
+                                  <span
+                                    className={
+                                      comp.value === 'Não informado'
+                                        ? 'text-slate-500 italic text-[11px]'
+                                        : 'text-slate-200'
+                                    }
+                                  >
+                                    {comp.value}
+                                  </span>
+                                  <div>{renderStatusBadge(comp.status)}</div>
+                                </div>
                               </td>
                             );
                           })}
@@ -544,53 +664,44 @@ export const SidePanelSimulator: React.FC<SidePanelSimulatorProps> = ({
               </div>
             </div>
 
-            {/* Block 3: Executive Verdict & Export Actions */}
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold font-mono text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
-                  <Award className="w-4 h-4" />
-                  <span>Veredito de Compra & Economia</span>
-                </span>
-                <button
-                  type="button"
-                  onClick={handleCopyReport}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 hover:border-cyan-500 transition-colors shadow-sm"
-                >
-                  {copied ? (
-                    <>
-                      <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
-                      <span className="text-emerald-400">Copiado!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3.5 h-3.5 text-cyan-400" />
-                      <span>Copiar Relatório</span>
-                    </>
-                  )}
-                </button>
-              </div>
-
-              <div className="text-xs text-slate-300 leading-relaxed bg-slate-950/60 p-3 rounded-lg border border-slate-800/80">
-                <p className="font-semibold text-slate-100 mb-1">
-                  🏆 Menor Preço Final: Slot {cheapestProduct?.id} ({cheapestProduct?.platform}) por{' '}
-                  <span className="text-emerald-400 font-mono font-bold">
-                    {formatCurrency(minTotal)}
+            {/* Block 3: Executive Summary & Copy Report */}
+            {aiResult && (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold font-mono text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <Award className="w-4 h-4" />
+                    <span>Veredito Técnico Executivo da IA</span>
                   </span>
-                  .
-                </p>
-                <p className="text-slate-400">
-                  Economia potencial de até{' '}
-                  <strong className="text-emerald-300 font-mono">
-                    {formatCurrency(
-                      Math.max(...activeProducts.map(p => (p.price || 0) + (p.shipping || 0))) - minTotal
+                  <button
+                    type="button"
+                    onClick={handleCopyReport}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 hover:border-cyan-500 transition-colors shadow-sm"
+                  >
+                    {copied ? (
+                      <>
+                        <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="text-emerald-400">Copiado!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5 text-cyan-400" />
+                        <span>Copiar Relatório</span>
+                      </>
                     )}
-                  </strong>{' '}
-                  em relação ao item mais caro da lista. Analise as linhas marcadas com{' '}
-                  <span className="text-amber-400 font-semibold">⚡ Disparidade</span> para decidir se o
-                  ganho de especificações justifica pagar mais.
-                </p>
+                  </button>
+                </div>
+
+                <div className="text-xs text-slate-300 leading-relaxed bg-slate-950/70 p-3.5 rounded-lg border border-slate-800/80 space-y-2">
+                  <p className="text-slate-200 font-medium">
+                    {aiResult.executive_summary}
+                  </p>
+                  <div className="text-[11px] text-slate-500 flex items-center justify-between pt-1 border-t border-slate-800">
+                    <span>Base de Confronto: Slot 1 ({slots[0]?.title})</span>
+                    <span className="font-mono">{filteredRows.length} atributos auditados</span>
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         ) : (
           /* Empty State when < 2 slots filled */
@@ -601,7 +712,7 @@ export const SidePanelSimulator: React.FC<SidePanelSimulatorProps> = ({
             </h4>
             <p className="text-xs text-slate-400 max-w-xs mx-auto">
               Abra as abas no navegador simulado à esquerda e clique em <strong>"Capturar Aba Atual"</strong> para
-              gerar a matriz comparativa de até 5 produtos.
+              gerar a matriz comparativa universal e agnóstica via IA.
             </p>
           </div>
         )}
