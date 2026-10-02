@@ -1,7 +1,7 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 
 dotenv.config();
 
@@ -20,10 +20,10 @@ const ai = new GoogleGenAI({
   },
 });
 
-// Endpoint: Dynamic AI Specification Extraction & Cross-Audit
+// Endpoint: Dynamic Multi-Slot Cross-Audit API
 app.post('/api/ai-audit', async (req, res) => {
   try {
-    const { slots } = req.body;
+    const { slots, baseSlotId = 1 } = req.body;
 
     if (!slots || !Array.isArray(slots) || slots.filter(Boolean).length === 0) {
       return res.status(400).json({ error: 'Nenhum slot fornecido para auditoria.' });
@@ -40,7 +40,7 @@ app.post('/api/ai-audit', async (req, res) => {
             .join('\n')
         : '';
 
-      slotsPromptText += `\n--- SLOT ${slot.id} (${slot.platform}) ---
+      slotsPromptText += `\n--- SLOT ${slot.id} (${slot.platform}) ${slot.id === baseSlotId ? '[SLOT BASE DE REFERÊNCIA]' : ''} ---
 Título: ${slot.title || 'Sem título'}
 Preço: R$ ${slot.price || 0} | Frete: R$ ${slot.shipping || 0}
 Texto / Ficha Técnica Bruta:
@@ -48,43 +48,60 @@ ${specsText || slot.rawText || 'Nenhuma especificação bruta informada'}
 `;
     });
 
-    const systemInstruction = `Você é um motor analítico e agnóstico de extração de dados e auditoria técnica para e-commerce.
-Sua missão é extrair DINAMICAMENTE todas as propriedades e especificações técnicas encontradas nos anúncios dos slots, sem nenhuma categoria ou lista pré-fixada. Funcione para QUALQUER produto (ferramentas, vestuário, eletrônicos, cosméticos, papelaria, automotivo, etc.).
+    const systemInstruction = `Você é um motor analítico de inteligência artificial para comparação cruzada técnica e de preços de múltiplos produtos em e-commerce (até 5 slots).
 
-Execute o processo em 3 etapas estritas:
-Etapa 1 - Mineração e Fusão: Varrer o texto bruto de todos os slots preenchidos e extrair todas as propriedades técnicas informadas.
-Etapa 2 - Normalização Semântica de Vocabulário: Mapear termos sinônimos para um nome limpo e comum (ex: "Torque máximo" vs "Força de aperto" -> "Torque", "Composição do tecido" vs "Material" -> "Composição", "Volume líquido" vs "Conteúdo" -> "Volume").
-Etapa 3 - Confronto Cruzado Tendo o Slot 1 como Parâmetro:
-  - Para cada linha gerada dinamicamente:
-    * Defina "slot_1_value" com o valor do Slot 1 (ou "Não informado" se ausente).
-    * Compare os Slots 2, 3, 4 e 5 contra o Slot 1.
-    * Status permitido para cada slot comparado:
-      - "equal": Se a especificação for idêntica ou equivalente direta ao Slot 1.
-      - "divergent": Se houver diferença técnica, numérica ou de recurso em relação ao Slot 1.
-      - "missing": Se o vendedor daquele slot não informou o dado.
+Regras de Operação:
+1. Agnosticismo Total: Não use categorias ou listas estáticas pré-fixadas. Extraia dinamicamente apenas o que os anúncios informam (qualquer nicho: ferramentas, cosméticos, vestuário, eletrônicos, etc.).
+2. Normalização Semântica de Vocabulário: Una termos sinônimos sob o mesmo atributo padronizado.
+3. Comparação Cruzada Entre Cada Slot:
+   - O Slot ${baseSlotId} é o Slot Base de Referência.
+   - Para CADA atributo encontrado:
+     * Extraia o valor de cada slot (Slot 1 ao Slot 5) ou preencha com "Não informado" se ausente.
+     * Compare cada slot contra a Base (Slot ${baseSlotId}):
+       - "base": para o próprio slot base.
+       - "equal": se o valor for idêntico ou equivalente técnico direto.
+       - "divergent": se houver diferença de especificações técnicas, potência, versão, volume, etc.
+       - "missing": se o dado não foi informado no anúncio.
+     * Gere uma análise cruzada (cross_analysis) identificando quais slots são idênticos entre si e quais divergem.
+4. Resumo Executivo: Confronte os prós e contras técnicos de cada slot frente ao preço total cobrado.`;
 
-Gere SEMPRE um JSON válido conforme o esquema solicitado.`;
-
-    const prompt = `Analise os seguintes produtos capturados nos slots e gere a matriz dinâmica de confronto técnico tendo o Slot 1 como referência:
+    const prompt = `Analise e execute a comparação cruzada de todas as especificações técnicas entre os seguintes produtos capturados nos slots:
 
 ${slotsPromptText}
 
-Retorne estritamente o JSON no seguinte formato:
+Slot Base Selecionado: Slot ${baseSlotId}
+
+Retorne estritamente um JSON no seguinte formato:
 {
   "detected_category": "Categoria inferida automaticamente (ex: Ferramentas Elétricas, Cosméticos, Vestuário, etc.)",
+  "base_slot_id": ${baseSlotId},
   "comparison_matrix": [
     {
       "attribute_name": "Nome dinâmico da especificação normalizada",
-      "slot_1_value": "Valor no Slot 1 (Base)",
+      "slot_1_value": "Valor no Slot 1",
+      "slot_values": {
+        "slot_1": "Valor no Slot 1 ou Não informado",
+        "slot_2": "Valor no Slot 2 ou Não informado",
+        "slot_3": "Valor no Slot 3 ou Não informado",
+        "slot_4": "Valor no Slot 4 ou Não informado",
+        "slot_5": "Valor no Slot 5 ou Não informado"
+      },
       "comparisons": {
-        "slot_2": { "value": "Valor no Slot 2", "status": "equal" | "divergent" | "missing" },
-        "slot_3": { "value": "Valor no Slot 3", "status": "equal" | "divergent" | "missing" },
-        "slot_4": { "value": "Valor no Slot 4", "status": "equal" | "divergent" | "missing" },
-        "slot_5": { "value": "Valor no Slot 5", "status": "equal" | "divergent" | "missing" }
+        "slot_1": { "value": "Valor", "status": "base | equal | divergent | missing", "diffNote": "Nota breve" },
+        "slot_2": { "value": "Valor", "status": "base | equal | divergent | missing", "diffNote": "Nota breve" },
+        "slot_3": { "value": "Valor", "status": "base | equal | divergent | missing", "diffNote": "Nota breve" },
+        "slot_4": { "value": "Valor", "status": "base | equal | divergent | missing", "diffNote": "Nota breve" },
+        "slot_5": { "value": "Valor", "status": "base | equal | divergent | missing", "diffNote": "Nota breve" }
+      },
+      "cross_analysis": {
+        "identical_groups": ["Slot 1 e Slot 3 são idênticos"],
+        "divergences": ["Slot 2 é 17 Nm menor que a base"],
+        "has_disparity": true,
+        "winner_slot": 1
       }
     }
   ],
-  "executive_summary": "Duas frases diretas resumindo qual slot oferece o melhor conjunto de especificações técnicas reais frente ao preço cobrado."
+  "executive_summary": "Duas a três frases confrontando detalhadamente as diferenças técnicas e o custo-benefício de cada slot em relação aos outros."
 }`;
 
     const response = await ai.models.generateContent({
@@ -107,7 +124,7 @@ Retorne estritamente o JSON no seguinte formato:
     console.error('Error in /api/ai-audit:', error);
     return res.status(500).json({
       success: false,
-      error: error.message || 'Falha ao processar auditoria com IA.',
+      error: error.message || 'Falha ao processar auditoria cruzada com IA.',
     });
   }
 });

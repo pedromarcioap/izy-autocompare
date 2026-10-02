@@ -1,9 +1,10 @@
 /**
  * AutoCompare Multi-Marketplace - SidePanel Logic (Manifest V3)
- * Módulo de Extração e Auditoria 100% Dinâmico & Agnóstico a Categorias
+ * Módulo de Comparação Cruzada de Especificações Técnicas Entre Cada Slot
  */
 
 let currentSlots = [null, null, null, null, null];
+let selectedBaseSlot = 1;
 let currentAIResult = null;
 
 // Initialize on DOM load
@@ -76,10 +77,8 @@ async function captureActiveTabToSlot(slotIndex) {
       return;
     }
 
-    // Send extraction message to content script
     chrome.tabs.sendMessage(tab.id, { action: 'EXTRACT_PRODUCT_DATA' }, async (response) => {
       if (chrome.runtime.lastError || !response || !response.success) {
-        // Fallback: inject content script on the fly and retry
         try {
           await chrome.scripting.executeScript({
             target: { tabId: tab.id },
@@ -91,7 +90,7 @@ async function captureActiveTabToSlot(slotIndex) {
               if (retryRes && retryRes.success) {
                 saveProductToSlot(slotIndex, retryRes.data);
               } else {
-                showStatus('Não foi possível extrair dados desta página. Verifique se a página já carregou completamente.', 'error');
+                showStatus('Não foi possível extrair dados desta página.', 'error');
               }
             });
           }, 300);
@@ -125,7 +124,7 @@ function saveProductToSlot(slotIndex, data) {
   currentSlots[slotIndex] = productObj;
   chrome.storage.local.set({ slots: currentSlots }, () => {
     renderUI();
-    showStatus(`Produto capturado com sucesso no Slot ${slotIndex + 1}!`, 'success');
+    showStatus(`Produto capturado no Slot ${slotIndex + 1}!`, 'success');
   });
 }
 
@@ -155,13 +154,13 @@ function cleanStr(s) {
 }
 
 /**
- * Motor Dinâmico e Agnóstico de IA (Executa as 3 etapas obrigatórias)
+ * Processa a comparação cruzada dinâmica entre todos os slots ativos
  */
-function processDynamicAIAudit(slots) {
+function processCrossSlotAudit(slots, baseSlotId) {
   const activeSlots = slots.filter(s => s !== null);
-  const slot1 = slots[0];
+  const baseSlot = slots[baseSlotId - 1] || activeSlots[0] || slots[0];
 
-  // Etapa 1 & 2: Mineração e Fusão semântica de atributos existentes
+  // 1. Mineração de atributos únicos
   const attributeMap = new Map(); // cleanKey -> Display Name
 
   activeSlots.forEach(slot => {
@@ -173,7 +172,7 @@ function processDynamicAIAudit(slots) {
     });
   });
 
-  // Inferir categoria a partir dos títulos
+  // 2. Inferir categoria dos títulos
   const allTitles = activeSlots.map(s => s.title.toLowerCase()).join(' ');
   let detectedCategory = 'Produto Geral & E-commerce';
   if (/furadeira|parafusadeira|torque|mandril|rpm|impacto/i.test(allTitles)) {
@@ -186,30 +185,35 @@ function processDynamicAIAudit(slots) {
     detectedCategory = 'Áudio & Fones de Ouvido';
   }
 
-  // Etapa 3: Confronto Cruzado Tendo o Slot 1 como Parâmetro
+  // 3. Confronto Cruzado entre cada slot tendo o baseSlotId como parâmetro
   const comparisonMatrix = [];
 
   attributeMap.forEach((displayLabel, cleanKey) => {
-    // Valor no Slot 1 (Base de referência)
-    let s1Val = 'Não informado';
-    if (slot1 && slot1.specs) {
-      for (const [k, v] of Object.entries(slot1.specs)) {
+    // Valor no Slot Base
+    let baseVal = 'Não informado';
+    if (baseSlot && baseSlot.specs) {
+      for (const [k, v] of Object.entries(baseSlot.specs)) {
         if (cleanStr(k) === cleanKey || cleanStr(k).includes(cleanKey) || cleanKey.includes(cleanStr(k))) {
-          s1Val = v;
+          baseVal = v;
           break;
         }
       }
     }
 
+    const slot_values = {};
     const comparisons = {};
+    const valuesBySlot = [];
 
-    // Comparar slots 2 a 5 com o Slot 1
-    for (let i = 1; i < 5; i++) {
+    // Avaliar cada slot de 1 a 5
+    for (let i = 0; i < 5; i++) {
       const slotNum = i + 1;
       const slotObj = slots[i];
       const slotKey = `slot_${slotNum}`;
 
-      if (!slotObj) continue;
+      if (!slotObj) {
+        slot_values[slotKey] = '—';
+        continue;
+      }
 
       let foundVal = null;
       for (const [k, v] of Object.entries(slotObj.specs || {})) {
@@ -219,28 +223,45 @@ function processDynamicAIAudit(slots) {
         }
       }
 
-      if (!foundVal) {
+      const valDisplay = foundVal || 'Não informado';
+      slot_values[slotKey] = valDisplay;
+
+      if (slotNum === baseSlotId) {
+        comparisons[slotKey] = {
+          value: valDisplay,
+          status: 'base',
+        };
+      } else if (!foundVal) {
         comparisons[slotKey] = {
           value: 'Não informado',
           status: 'missing',
         };
       } else {
-        const isIdentical = s1Val !== 'Não informado' && cleanStr(s1Val) === cleanStr(foundVal);
+        const isIdentical = baseVal !== 'Não informado' && cleanStr(baseVal) === cleanStr(foundVal);
         comparisons[slotKey] = {
           value: foundVal,
           status: isIdentical ? 'equal' : 'divergent',
         };
       }
+
+      if (foundVal) {
+        valuesBySlot.push({ slotId: slotNum, val: foundVal, clean: cleanStr(foundVal) });
+      }
     }
+
+    // Identificar grupos idênticos entre si
+    const distinctClean = new Set(valuesBySlot.map(v => v.clean));
+    const hasDisparity = distinctClean.size > 1;
 
     comparisonMatrix.push({
       attribute_name: displayLabel,
-      slot_1_value: s1Val,
+      slot_values,
       comparisons,
+      hasDisparity,
     });
   });
 
-  // Veredito Executivo
+  // 4. Veredito Executivo
   let minTotal = Infinity;
   let minSlot = activeSlots[0];
   activeSlots.forEach(s => {
@@ -251,10 +272,11 @@ function processDynamicAIAudit(slots) {
     }
   });
 
-  const executiveSummary = `O Slot ${minSlot?.id} (${minSlot?.platform}) lidera no quesito custo-benefício direto com desembolso de ${formatCurrency(minTotal)}. O Slot 1 serve de referência nas especificações técnicas para avaliar eventuais upgrades.`;
+  const executiveSummary = `Comparando todas as especificações técnicas entre os ${activeSlots.length} slots, o Slot ${minSlot?.id} (${minSlot?.platform}) oferece o menor desembolso total (${formatCurrency(minTotal)}). Utilize o Slot ${baseSlotId} como referência para analisar ganhos técnicos e divergências nas especificações.`;
 
   return {
     detected_category: detectedCategory,
+    base_slot_id: baseSlotId,
     comparison_matrix: comparisonMatrix,
     executive_summary: executiveSummary,
   };
@@ -267,6 +289,10 @@ function renderUI() {
 
   document.getElementById('slotCountLabel').innerText = `${activeCount}/5`;
 
+  if (activeProducts.length > 0 && !currentSlots[selectedBaseSlot - 1]) {
+    selectedBaseSlot = activeProducts[0].id;
+  }
+
   // 1. Render Slot Cards Strip
   const container = document.getElementById('slotsContainer');
   container.innerHTML = '';
@@ -274,7 +300,8 @@ function renderUI() {
   for (let i = 0; i < 5; i++) {
     const slot = currentSlots[i];
     const slotEl = document.createElement('div');
-    const isBase = i === 0;
+    const slotId = i + 1;
+    const isBase = slotId === selectedBaseSlot;
 
     if (slot) {
       const isShopee = slot.platform.toLowerCase().includes('shopee');
@@ -285,7 +312,7 @@ function renderUI() {
 
       slotEl.innerHTML = `
         <div style="display: flex; align-items: center; justify-content: space-between;">
-          <span class="badge ${isShopee ? 'badge-shopee' : 'badge-ali'}">Slot ${i + 1} • ${slot.platform}${isBase ? ' (Base)' : ''}</span>
+          <span class="badge ${isShopee ? 'badge-shopee' : 'badge-ali'}">Slot ${slotId} • ${slot.platform}</span>
           <button class="btn-clear-slot" data-slot="${i}" style="background: transparent; border: none; color: #f43f5e; cursor: pointer; font-size: 12px;" title="Limpar este slot">✕</button>
         </div>
         <div style="display: flex; gap: 8px; align-items: center; margin-top: 4px;">
@@ -300,7 +327,9 @@ function renderUI() {
           </div>
         </div>
         <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px; font-size: 10px; color: #64748b;">
-          <span>${Object.keys(slot.specs || {}).length} specs</span>
+          <button class="btn-set-base" data-slotid="${slotId}" style="background: ${isBase ? '#06b6d4' : '#1e293b'}; color: ${isBase ? '#020617' : '#94a3b8'}; border: 1px solid #334155; border-radius: 4px; padding: 2px 4px; font-weight: ${isBase ? 'bold' : 'normal'}; cursor: pointer;">
+            ${isBase ? '★ Base' : 'Definir Base'}
+          </button>
           <button class="btn-recapture" data-slot="${i}" style="background: #1e293b; border: 1px solid #334155; border-radius: 4px; padding: 2px 4px; color: #94a3b8; cursor: pointer;">Recapturar</button>
         </div>
       `;
@@ -308,7 +337,7 @@ function renderUI() {
       slotEl.className = 'slot-card slot-empty';
       slotEl.innerHTML = `
         <div>
-          <div style="font-weight: 700; font-size: 11px; color: #475569; margin-bottom: 2px;">SLOT ${i + 1} LIVRE ${isBase ? '(BASE)' : ''}</div>
+          <div style="font-weight: 700; font-size: 11px; color: #475569; margin-bottom: 2px;">SLOT ${slotId} LIVRE</div>
           <button class="btn-capture-slot" data-slot="${i}" style="font-size: 10px; color: #38bdf8; background: transparent; border: 1px dashed #0284c7; padding: 3px 6px; border-radius: 4px; cursor: pointer;">
             + Capturar Aba
           </button>
@@ -323,6 +352,13 @@ function renderUI() {
     btn.addEventListener('click', (e) => {
       const idx = parseInt(e.currentTarget.getAttribute('data-slot'), 10);
       clearSingleSlot(idx);
+    });
+  });
+
+  container.querySelectorAll('.btn-set-base').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      selectedBaseSlot = parseInt(e.currentTarget.getAttribute('data-slotid'), 10);
+      renderUI();
     });
   });
 
@@ -341,16 +377,42 @@ function renderUI() {
     compSection.style.display = 'block';
     emptyState.style.display = 'none';
 
-    currentAIResult = processDynamicAIAudit(currentSlots);
+    currentAIResult = processCrossSlotAudit(currentSlots, selectedBaseSlot);
 
     renderFinancialMatrix(activeProducts);
-    renderDynamicSpecMatrix(currentAIResult, activeProducts);
+    renderBaseSelectorButtons(activeProducts);
+    renderCrossSpecMatrix(currentAIResult, activeProducts);
     renderExecutiveVerdict(currentAIResult, activeProducts);
   } else {
     compSection.style.display = 'none';
     emptyState.style.display = 'block';
     currentAIResult = null;
   }
+}
+
+// Render Base Selector Buttons
+function renderBaseSelectorButtons(activeProducts) {
+  const container = document.getElementById('baseSlotButtons');
+  container.innerHTML = '';
+
+  activeProducts.forEach(p => {
+    const isBase = p.id === selectedBaseSlot;
+    const btn = document.createElement('button');
+    btn.className = 'btn-secondary';
+    btn.style.padding = '2px 6px';
+    btn.style.fontSize = '10px';
+    if (isBase) {
+      btn.style.background = '#06b6d4';
+      btn.style.color = '#020617';
+      btn.style.fontWeight = 'bold';
+    }
+    btn.innerText = `Slot ${p.id} (${p.platform})`;
+    btn.addEventListener('click', () => {
+      selectedBaseSlot = p.id;
+      renderUI();
+    });
+    container.appendChild(btn);
+  });
 }
 
 // Render Financial Matrix Table
@@ -368,10 +430,10 @@ function renderFinancialMatrix(activeProducts) {
       <tr>
         <th style="width: 140px;">Indicador</th>
         ${activeProducts.map(p => `
-          <th>
+          <th class="${p.id === selectedBaseSlot ? 'base-col-header' : ''}">
             <div style="display: flex; align-items: center; gap: 4px;">
-              <span class="badge" style="background: #1e293b; color: #fff;">Slot ${p.id}${p.id === 1 ? ' (Base)' : ''}</span>
-              <span style="max-width: 100px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${p.platform}</span>
+              <span class="badge" style="background: #1e293b; color: #fff;">Slot ${p.id}${p.id === selectedBaseSlot ? ' (Base)' : ''}</span>
+              <span style="max-width: 90px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${p.platform}</span>
             </div>
           </th>
         `).join('')}
@@ -418,24 +480,20 @@ function renderFinancialMatrix(activeProducts) {
   table.innerHTML = html;
 }
 
-// Render Dynamic Spec Matrix with Slot 1 as parameter
-function renderDynamicSpecMatrix(aiResult, activeProducts) {
+// Render Cross Spec Matrix with Base Slot highlighting and per-slot comparison
+function renderCrossSpecMatrix(aiResult, activeProducts) {
   const table = document.getElementById('specMatrixTable');
 
   let html = `
     <thead>
       <tr>
-        <th style="width: 140px;">Atributo Normalizado</th>
-        <th style="color: #38bdf8; background: #0c1524;">
-          <div>Slot 1 (Base Referência)</div>
-          <div style="font-size: 10px; color: #94a3b8; font-weight: normal; truncate">${currentSlots[0]?.title || 'Slot 1'}</div>
-        </th>
-        ${currentSlots.slice(1).map((s, idx) => {
-          if (!s) return '';
+        <th style="width: 140px;">Atributo Técnico</th>
+        ${activeProducts.map(p => {
+          const isBase = p.id === selectedBaseSlot;
           return `
-            <th>
-              <div>Slot ${idx + 2}</div>
-              <div style="font-size: 10px; color: #94a3b8; font-weight: normal; truncate">${s.title}</div>
+            <th class="${isBase ? 'base-col-header' : ''}">
+              <div style="font-weight: 700;">Slot ${p.id} ${isBase ? '(Base)' : ''}</div>
+              <div style="font-size: 10px; color: #94a3b8; font-weight: normal; max-width: 110px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${p.title}</div>
             </th>
           `;
         }).join('')}
@@ -455,32 +513,31 @@ function renderDynamicSpecMatrix(aiResult, activeProducts) {
   } else {
     aiResult.comparison_matrix.forEach(row => {
       html += `
-        <tr class="spec-row">
+        <tr class="spec-row ${row.hasDisparity ? 'disparity-row' : ''}">
           <td style="font-weight: 600; color: #f1f5f9; background: #0f172a;">
             ${row.attribute_name}
+            ${row.hasDisparity ? `<span style="font-size: 9px; color: #f59e0b; display: block; font-weight: normal;">⚡ Disparidade</span>` : ''}
           </td>
-          <td style="font-family: monospace; color: #67e8f9; background: rgba(6, 182, 212, 0.08); font-weight: 600;">
-            ${row.slot_1_value}
-          </td>
-          ${currentSlots.slice(1).map((s, idx) => {
-            if (!s) return '';
-            const slotNum = idx + 2;
-            const comp = row.comparisons[`slot_${slotNum}`];
-
-            if (!comp) return `<td>—</td>`;
+          ${activeProducts.map(p => {
+            const isBase = p.id === selectedBaseSlot;
+            const val = row.slot_values[`slot_${p.id}`] || 'Não informado';
+            const comp = row.comparisons[`slot_${p.id}`];
+            const isMissing = val === 'Não informado' || val === '—';
 
             let badgeHtml = '';
-            if (comp.status === 'equal') {
+            if (isBase) {
+              badgeHtml = `<div style="font-size: 9px; color: #38bdf8; font-weight: 700; margin-top: 2px;">★ Base</div>`;
+            } else if (comp?.status === 'equal') {
               badgeHtml = `<div style="font-size: 9px; color: #34d399; font-weight: 700; margin-top: 2px;">[Idêntico]</div>`;
-            } else if (comp.status === 'divergent') {
+            } else if (comp?.status === 'divergent') {
               badgeHtml = `<div style="font-size: 9px; color: #f59e0b; font-weight: 700; margin-top: 2px;">[Divergência]</div>`;
             } else {
               badgeHtml = `<div style="font-size: 9px; color: #64748b; margin-top: 2px;">[Não informado]</div>`;
             }
 
             return `
-              <td class="${comp.status === 'divergent' ? 'disparity-cell' : ''}" style="font-family: monospace;">
-                <div>${comp.value}</div>
+              <td class="${isBase ? 'base-col-cell' : comp?.status === 'divergent' ? 'disparity-cell' : ''}" style="font-family: monospace;">
+                <div style="${isMissing ? 'color: #64748b; font-style: italic;' : ''}">${val}</div>
                 ${badgeHtml}
               </td>
             `;
@@ -510,7 +567,7 @@ function renderExecutiveVerdict(aiResult, activeProducts) {
 
   container.innerHTML = `
     <div style="margin-bottom: 6px; font-weight: 600; color: #f8fafc;">
-      🏷️ <strong>Categoria Inferida pela IA:</strong> ${aiResult.detected_category}
+      🏷️ <strong>Categoria:</strong> ${aiResult.detected_category} • <strong>Base de Comparação:</strong> Slot ${selectedBaseSlot}
     </div>
     <div style="color: #cbd5e1; font-size: 12px; line-height: 1.5;">
       ${aiResult.executive_summary}
@@ -523,8 +580,9 @@ function copyComparisonReport() {
   const activeProducts = currentSlots.filter(s => s !== null);
   if (activeProducts.length < 2 || !currentAIResult) return;
 
-  let report = `📊 *AUTOCOMPARE MULTI-MARKETPLACE (EXTRAÇÃO DINÂMICA IA)*\n`;
+  let report = `📊 *AUTOCOMPARE MULTI-MARKETPLACE (CONFRONTO ENTRE SLOTS)*\n`;
   report += `🏷️ *Categoria:* ${currentAIResult.detected_category}\n`;
+  report += `🎯 *Base de Referência:* Slot ${selectedBaseSlot} (${currentSlots[selectedBaseSlot - 1]?.title})\n`;
   report += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
   activeProducts.forEach(p => {
     const total = (p.price || 0) + (p.shipping || 0);
@@ -533,16 +591,14 @@ function copyComparisonReport() {
   });
   report += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
   report += `⚖️ *VEREDITO DA IA:*\n${currentAIResult.executive_summary}\n\n`;
-  report += `🔍 *CONFRONTO TÉCNICO (BASE: SLOT 1):*\n`;
+  report += `🔍 *CONFRONTO TÉCNICO ENTRE CADA SLOT:*\n`;
   currentAIResult.comparison_matrix.forEach(row => {
-    report += `• *${row.attribute_name}:* Slot 1 = "${row.slot_1_value}"`;
-    for (let i = 2; i <= 5; i++) {
-      const comp = row.comparisons[`slot_${i}`];
-      if (comp && currentSlots[i - 1]) {
-        report += ` | Slot ${i} = "${comp.value}" [${comp.status}]`;
-      }
-    }
-    report += `\n`;
+    report += `• *${row.attribute_name}:*\n`;
+    activeProducts.forEach(p => {
+      const val = row.slot_values[`slot_${p.id}`] || 'Não informado';
+      const comp = row.comparisons[`slot_${p.id}`];
+      report += `   - Slot ${p.id}: "${val}" [${p.id === selectedBaseSlot ? 'Base' : comp?.status || 'info'}]\n`;
+    });
   });
   report += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
   report += `Gerado via AutoCompare Chrome Extension`;
