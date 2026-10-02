@@ -34,75 +34,59 @@ app.post('/api/ai-audit', async (req, res) => {
     // Build context prompt with the raw texts of all active slots
     let slotsPromptText = '';
     activeSlots.forEach((slot: any) => {
-      const specsText = slot.specs
+      const specsText = slot.raw_specs || (slot.specs
         ? Object.entries(slot.specs)
             .map(([k, v]) => `- ${k}: ${v}`)
             .join('\n')
-        : '';
+        : '');
 
       slotsPromptText += `\n--- SLOT ${slot.id} (${slot.platform}) ${slot.id === baseSlotId ? '[SLOT BASE DE REFERÊNCIA]' : ''} ---
 Título: ${slot.title || 'Sem título'}
 Preço: R$ ${slot.price || 0} | Frete: R$ ${slot.shipping || 0}
-Texto / Ficha Técnica Bruta:
-${specsText || slot.rawText || 'Nenhuma especificação bruta informada'}
+Ficha Técnica / Texto Bruto (raw_specs):
+${specsText || slot.title || 'Nenhuma especificação informada'}
 `;
     });
 
-    const systemInstruction = `Você é um motor analítico de inteligência artificial para comparação cruzada técnica e de preços de múltiplos produtos em e-commerce (até 5 slots).
+    const systemInstruction = `Você é um Auditor Técnico Especialista em Produtos e E-commerce.
+Sua missão é analisar os dados de até 5 produtos capturados nos slots (Slot 1 a Slot 5) e gerar um relatório comparativo rigoroso.
 
-Regras de Operação:
-1. Agnosticismo Total: Não use categorias ou listas estáticas pré-fixadas. Extraia dinamicamente apenas o que os anúncios informam (qualquer nicho: ferramentas, cosméticos, vestuário, eletrônicos, etc.).
-2. Normalização Semântica de Vocabulário: Una termos sinônimos sob o mesmo atributo padronizado.
-3. Comparação Cruzada Entre Cada Slot:
-   - O Slot ${baseSlotId} é o Slot Base de Referência.
-   - Para CADA atributo encontrado:
-     * Extraia o valor de cada slot (Slot 1 ao Slot 5) ou preencha com "Não informado" se ausente.
-     * Compare cada slot contra a Base (Slot ${baseSlotId}):
-       - "base": para o próprio slot base.
-       - "equal": se o valor for idêntico ou equivalente técnico direto.
-       - "divergent": se houver diferença de especificações técnicas, potência, versão, volume, etc.
-       - "missing": se o dado não foi informado no anúncio.
-     * Gere uma análise cruzada (cross_analysis) identificando quais slots são idênticos entre si e quais divergem.
-4. Resumo Executivo: Confronte os prós e contras técnicos de cada slot frente ao preço total cobrado.`;
+DIRETRIZES DE AUDITORIA:
+1. Extração Dinâmica e Agnóstica: O produto pode ser qualquer coisa (artigos de arte, hardware, roupas, ferramentas, papelaria, etc.). Não use esquemas pré-fixados.
+2. Fallback por Título: Se o campo 'raw_specs' de algum slot contiver apenas o título ou pouca informação, EXTRAIA AS ESPECIFICAÇÕES DIRETAMENTE DO TÍTULO (ex.: gramatura '180GSM', composição '50% Cotton', encadernação 'Hardcover', dimensões 'A5 / 8.3x5.9in', número de folhas/páginas, voltagem, torque, etc.).
+3. Matriz Canônica (Chave a Chave):
+   - Crie uma linha para cada propriedade relevante encontrada (ex.: Dimensões/Tamanho, Gramatura/Espessura, Material/Composição da Fibra, Quantidade de Folhas/Páginas, Tipo de Encadernação/Capa, Indicação de Uso, etc.).
+   - O Slot 1 é SEMPRE a base de referência.
+   - Para os Slots 2, 3, 4 e 5, preencha o valor correspondente e classifique na própria string como:
+     * [Idêntico]: Especificação equivalente ou igual ao Slot 1.
+     * [Divergente]: Especificação diferente (indicar se é superior, inferior ou alternativa).
+     * [Não informado]: Quando não houver dado disponível nem no título nem no texto.
+4. Veredito Técnico e Comercial:
+   - Aponte "falsos matches" de preço baixo (ex.: o Slot X é muito mais barato porque usa papel fino de 70g ou apenas 30 folhas, enquanto o Slot 1 oferece 180g com 50% algodão).
+   - Destaque o real campeão de custo-benefício técnico.
 
-    const prompt = `Analise e execute a comparação cruzada de todas as especificações técnicas entre os seguintes produtos capturados nos slots:
+FORMATO DE RETORNO OBRIGATÓRIO (JSON PURO):
+{
+  "category": "Nome da categoria inferida",
+  "reference_slot": 1,
+  "specs_matrix": [
+    {
+      "attribute": "Nome da Especificação (ex: Gramatura)",
+      "slot_1": "180 g/m²",
+      "slot_2": "Não informada (Inferior)",
+      "slot_3": "180 g/m² (Idêntico)",
+      "slot_4": "Não informada",
+      "slot_5": "160 g/m² (Ligeiramente inferior)"
+    }
+  ],
+  "technical_verdict": "Texto de 2 a 3 frases explicando as armadilhas de preço e qual oferece a melhor especificação técnica real."
+}`;
+
+    const prompt = `Analise detalhadamente os dados dos seguintes produtos capturados nos slots e gere a matriz de confronto técnico e financeiro:
 
 ${slotsPromptText}
 
-Slot Base Selecionado: Slot ${baseSlotId}
-
-Retorne estritamente um JSON no seguinte formato:
-{
-  "detected_category": "Categoria inferida automaticamente (ex: Ferramentas Elétricas, Cosméticos, Vestuário, etc.)",
-  "base_slot_id": ${baseSlotId},
-  "comparison_matrix": [
-    {
-      "attribute_name": "Nome dinâmico da especificação normalizada",
-      "slot_1_value": "Valor no Slot 1",
-      "slot_values": {
-        "slot_1": "Valor no Slot 1 ou Não informado",
-        "slot_2": "Valor no Slot 2 ou Não informado",
-        "slot_3": "Valor no Slot 3 ou Não informado",
-        "slot_4": "Valor no Slot 4 ou Não informado",
-        "slot_5": "Valor no Slot 5 ou Não informado"
-      },
-      "comparisons": {
-        "slot_1": { "value": "Valor", "status": "base | equal | divergent | missing", "diffNote": "Nota breve" },
-        "slot_2": { "value": "Valor", "status": "base | equal | divergent | missing", "diffNote": "Nota breve" },
-        "slot_3": { "value": "Valor", "status": "base | equal | divergent | missing", "diffNote": "Nota breve" },
-        "slot_4": { "value": "Valor", "status": "base | equal | divergent | missing", "diffNote": "Nota breve" },
-        "slot_5": { "value": "Valor", "status": "base | equal | divergent | missing", "diffNote": "Nota breve" }
-      },
-      "cross_analysis": {
-        "identical_groups": ["Slot 1 e Slot 3 são idênticos"],
-        "divergences": ["Slot 2 é 17 Nm menor que a base"],
-        "has_disparity": true,
-        "winner_slot": 1
-      }
-    }
-  ],
-  "executive_summary": "Duas a três frases confrontando detalhadamente as diferenças técnicas e o custo-benefício de cada slot em relação aos outros."
-}`;
+Gere o JSON rigorosamente estruturado conforme as instruções.`;
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.8-flash',

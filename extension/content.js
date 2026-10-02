@@ -1,14 +1,14 @@
 /**
- * AutoCompare Multi-Marketplace - Content Script
- * Suporta extração de dados da Shopee e AliExpress
+ * AutoCompare Multi-Marketplace - Content Script (Manifest V3)
+ * Extração de dados em cascata com fallback robusto para Shopee e AliExpress
  */
 
 (function () {
-  // Prevent duplicate execution
+  // Prevent duplicate injection
   if (window.__AUTOCOMPARE_CONTENT_SCRIPT_INJECTED__) return;
   window.__AUTOCOMPARE_CONTENT_SCRIPT_INJECTED__ = true;
 
-  // Helper: parse price string like "R$ 79,90", "79.90", "R$79" to float
+  // Helper: parse price string to float
   function parsePrice(text) {
     if (!text) return 0;
     const clean = text
@@ -35,11 +35,27 @@
     return null;
   }
 
+  // Helper to extract selected variant/options
+  function extractSelectedOptions() {
+    const options = [];
+    // Shopee variant buttons
+    document.querySelectorAll('.product-variation--selected, button[class*="variation--selected"], div[class*="selected-variation"]').forEach(el => {
+      const text = el.innerText.trim();
+      if (text) options.push(text);
+    });
+    // AliExpress sku selected
+    document.querySelectorAll('.sku-property-item.selected, .sku-item.selected, div[class*="skuItem--selected"]').forEach(el => {
+      const text = el.innerText.trim() || el.getAttribute('title') || '';
+      if (text) options.push(text);
+    });
+    return options.length > 0 ? `Opções selecionadas: ${options.join(', ')}` : '';
+  }
+
   // --- SHOPEE EXTRACTOR ---
   function extractShopee() {
     const jsonLd = extractJsonLd();
 
-    // Title
+    // 1. Title
     let title = '';
     const titleEl =
       document.querySelector('div._44qnta') ||
@@ -57,7 +73,7 @@
     }
     title = title.replace(/\s+/g, ' ').trim();
 
-    // Price
+    // 2. Price
     let price = 0;
     const priceEl =
       document.querySelector('div.pqTWkA') ||
@@ -75,7 +91,7 @@
       if (offer && offer.price) price = parseFloat(offer.price);
     }
 
-    // Shipping
+    // 3. Shipping
     let shipping = 0;
     const shipEl =
       document.querySelector('div.W30k1z') ||
@@ -88,7 +104,7 @@
       }
     }
 
-    // Image
+    // 4. Image
     let image = '';
     const imgEl =
       document.querySelector('div.flex-1 img') ||
@@ -102,38 +118,60 @@
       image = Array.isArray(jsonLd.image) ? jsonLd.image[0] : jsonLd.image;
     }
 
-    // Specs
+    // 5. Cascading Specs Extraction
     const specs = {};
+    let raw_specs = '';
+
+    // Tentativa Primária: Tabela e listas de especificações da Shopee
     const specRows = document.querySelectorAll(
-      'div._2-5R_w, div.e8lZp3, div.pdp-params tr, div[class*="specification"] tr, div.a11y-specs-item'
+      'div.page-product__detail tr, .section-product-specification tr, div[class*="product-detail"] tr, div._2-5R_w, div.e8lZp3, div.pdp-params tr, div[class*="specification"] tr, div.a11y-specs-item'
     );
 
     specRows.forEach((row) => {
-      const labelEl = row.querySelector('label, th, div.label, span._2j2Q3c, div[class*="label"]');
-      const valEl = row.querySelector('div:not(.label), td, div.value, div._3y5X4B, div[class*="value"]');
+      const labelEl = row.querySelector('label, th, div.label, span._2j2Q3c, div[class*="label"], td:first-child');
+      const valEl = row.querySelector('div:not(.label), td:last-child, div.value, div._3y5X4B, div[class*="value"]');
 
       if (labelEl && valEl) {
         const k = labelEl.innerText.replace(/[:：]/g, '').trim();
         const v = valEl.innerText.trim();
-        if (k && v) specs[k] = v;
+        if (k && v && k !== v) specs[k] = v;
       }
     });
 
-    // If specs are empty, extract description bullet points
-    if (Object.keys(specs).length === 0) {
+    if (Object.keys(specs).length > 0) {
+      raw_specs = Object.entries(specs)
+        .map(([k, v]) => `- ${k}: ${v}`)
+        .join('\n');
+    }
+
+    // Tentativa Secundária: Texto Global de Descrição (primeiros 1.500 caracteres)
+    if (!raw_specs || raw_specs.length < 30) {
       const descEl =
         document.querySelector('div._3y5X4B') ||
         document.querySelector('div.e8lZp3') ||
-        document.querySelector('div[class*="description"]');
-      if (descEl) {
-        const lines = descEl.innerText.split('\n');
-        lines.forEach((line) => {
-          const match = line.match(/^[\s\-*•]?\s*([^:：]+)[:：]\s*(.+)$/);
-          if (match && match[1] && match[2]) {
-            specs[match[1].trim()] = match[2].trim();
-          }
-        });
+        document.querySelector('div[class*="description"]') ||
+        document.querySelector('div[class*="product-detail"]');
+      if (descEl && descEl.innerText) {
+        const descText = descEl.innerText.trim().slice(0, 1500);
+        if (descText.length > 20) {
+          raw_specs = (raw_specs ? raw_specs + '\n\n' : '') + descText;
+          // Extract any key-value lines from description
+          descText.split('\n').forEach(line => {
+            const match = line.match(/^[\s\-*•]?\s*([^:：]{2,40})[:：]\s*(.+)$/);
+            if (match && match[1] && match[2]) {
+              specs[match[1].trim()] = match[2].trim();
+            }
+          });
+        }
       }
+    }
+
+    // Fallback Mandatório: Título + Preço + Opções (Garante que nunca seja vazio)
+    const selectedOptions = extractSelectedOptions();
+    if (!raw_specs || raw_specs.length < 20) {
+      raw_specs = `Produto: ${title}\nPreço: R$ ${price}\n${selectedOptions}\nPlataforma: Shopee`;
+    } else if (selectedOptions) {
+      raw_specs += `\n${selectedOptions}`;
     }
 
     return {
@@ -142,6 +180,7 @@
       price: price || 0,
       shipping: shipping || 0,
       image: image || '',
+      raw_specs: raw_specs,
       specs: specs,
       url: window.location.href,
     };
@@ -151,7 +190,7 @@
   function extractAliExpress() {
     const jsonLd = extractJsonLd();
 
-    // Title
+    // 1. Title
     let title = '';
     const titleEl =
       document.querySelector('h1[data-pl="product-title"]') ||
@@ -168,7 +207,7 @@
     }
     title = title.replace(/\s+/g, ' ').trim();
 
-    // Price
+    // 2. Price
     let price = 0;
     const priceEl =
       document.querySelector('.price--currentPriceText--2_2u_a') ||
@@ -187,7 +226,7 @@
       if (offer && offer.price) price = parseFloat(offer.price);
     }
 
-    // Shipping
+    // 3. Shipping
     let shipping = 0;
     const shipEl =
       document.querySelector('.dynamic-shipping-title') ||
@@ -203,7 +242,7 @@
       }
     }
 
-    // Image
+    // 4. Image
     let image = '';
     const imgEl =
       document.querySelector('.magnifier--image--l4hKqS_') ||
@@ -218,27 +257,65 @@
       image = Array.isArray(jsonLd.image) ? jsonLd.image[0] : jsonLd.image;
     }
 
-    // Specs
+    // 5. Cascading Specs Extraction
     const specs = {};
+    let raw_specs = '';
+
+    // Tentativa Primária: Tabela e itens de especificação do AliExpress
     const propItems = document.querySelectorAll(
-      '#product-prop li, .specification--list-- li, .prop-item, .specification--propItem--, ul.product-prop-list li'
+      '[data-spm="specification"] li, .specification--prop li, ul.product-specs li, .pdp-info-right li, #product-prop li, .specification--list-- li, .prop-item, .specification--propItem--, ul.product-prop-list li'
     );
 
     propItems.forEach((item) => {
-      const titleAttr = item.querySelector('.title, .specification--title--');
-      const descAttr = item.querySelector('.desc, .specification--desc--');
-      if (titleAttr && descAttr) {
+      const titleAttr = item.querySelector('.title, .specification--title--, span:first-child');
+      const descAttr = item.querySelector('.desc, .specification--desc--, span:last-child');
+      if (titleAttr && descAttr && titleAttr !== descAttr) {
         const k = titleAttr.innerText.replace(/[:：]/g, '').trim();
         const v = descAttr.innerText.trim();
         if (k && v) specs[k] = v;
       } else {
         const text = item.innerText;
-        const match = text.match(/^([^:：]+)[:：]\s*(.+)$/);
+        const match = text.match(/^([^:：]{2,40})[:：]\s*(.+)$/);
         if (match && match[1] && match[2]) {
           specs[match[1].trim()] = match[2].trim();
         }
       }
     });
+
+    if (Object.keys(specs).length > 0) {
+      raw_specs = Object.entries(specs)
+        .map(([k, v]) => `- ${k}: ${v}`)
+        .join('\n');
+    }
+
+    // Tentativa Secundária: Texto Global de Descrição (primeiros 1.500 caracteres)
+    if (!raw_specs || raw_specs.length < 30) {
+      const descEl =
+        document.querySelector('.detail-desc-decorate-richtext') ||
+        document.querySelector('#product-description') ||
+        document.querySelector('.product-description') ||
+        document.querySelector('div[class*="description"]');
+      if (descEl && descEl.innerText) {
+        const descText = descEl.innerText.trim().slice(0, 1500);
+        if (descText.length > 20) {
+          raw_specs = (raw_specs ? raw_specs + '\n\n' : '') + descText;
+          descText.split('\n').forEach(line => {
+            const match = line.match(/^[\s\-*•]?\s*([^:：]{2,40})[:：]\s*(.+)$/);
+            if (match && match[1] && match[2]) {
+              specs[match[1].trim()] = match[2].trim();
+            }
+          });
+        }
+      }
+    }
+
+    // Fallback Mandatório: Título + Preço + Opções
+    const selectedOptions = extractSelectedOptions();
+    if (!raw_specs || raw_specs.length < 20) {
+      raw_specs = `Produto: ${title}\nPreço: R$ ${price}\n${selectedOptions}\nPlataforma: AliExpress`;
+    } else if (selectedOptions) {
+      raw_specs += `\n${selectedOptions}`;
+    }
 
     return {
       platform: 'AliExpress',
@@ -246,6 +323,7 @@
       price: price || 0,
       shipping: shipping || 0,
       image: image || '',
+      raw_specs: raw_specs,
       specs: specs,
       url: window.location.href,
     };
@@ -260,7 +338,7 @@
     } else if (host.includes('aliexpress')) {
       return extractAliExpress();
     } else {
-      // Generic fallback for any other e-commerce
+      // Generic fallback
       const jsonLd = extractJsonLd();
       const title = document.querySelector('h1')?.innerText || document.title || 'Produto Capturado';
       const ogImg = document.querySelector('meta[property="og:image"]')?.getAttribute('content') || '';
@@ -270,6 +348,7 @@
         price: 0,
         shipping: 0,
         image: ogImg,
+        raw_specs: `Produto: ${title.trim()}\nURL: ${window.location.href}`,
         specs: {},
         url: window.location.href,
       };

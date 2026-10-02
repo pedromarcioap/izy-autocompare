@@ -72,11 +72,11 @@ export const ExtensionFilesViewer: React.FC = () => {
     },
     {
       filename: 'content.js',
-      description: 'Seletores DOM atualizados para Shopee e AliExpress com extração de título, preço, frete, imagem e ficha técnica.',
+      description: 'Extração em cascata (Tabela técnica -> Texto de descrição -> Título + Metadados) com garantia de raw_specs nunca vazio.',
       language: 'javascript',
       code: `/**
- * AutoCompare Multi-Marketplace - Content Script
- * Suporta extração de dados da Shopee e AliExpress
+ * AutoCompare Multi-Marketplace - Content Script (Manifest V3)
+ * Extração em cascata com fallback robusto
  */
 
 (function () {
@@ -85,245 +85,107 @@ export const ExtensionFilesViewer: React.FC = () => {
 
   function parsePrice(text) {
     if (!text) return 0;
-    const clean = text
-      .replace(/[^\\d,\\.]/g, '')
-      .replace(/\\.(?=\\d{3})/g, '')
-      .replace(',', '.');
+    const clean = text.replace(/[^\\d,\\.]/g, '').replace(/\\.(?=\\d{3})/g, '').replace(',', '.');
     const val = parseFloat(clean);
     return isNaN(val) ? 0 : val;
   }
 
-  function extractJsonLd() {
-    try {
-      const scripts = document.querySelectorAll('script[type="application/ld+json"]');
-      for (const s of scripts) {
-        const json = JSON.parse(s.innerText);
-        if (json['@type'] === 'Product' || json.offers) {
-          return json;
-        }
-      }
-    } catch (e) {}
-    return null;
+  function extractSelectedOptions() {
+    const options = [];
+    document.querySelectorAll('.product-variation--selected, .sku-property-item.selected, .sku-item.selected').forEach(el => {
+      const text = el.innerText.trim() || el.getAttribute('title') || '';
+      if (text) options.push(text);
+    });
+    return options.length > 0 ? \`Opções: \${options.join(', ')}\` : '';
   }
 
   function extractShopee() {
-    const jsonLd = extractJsonLd();
-    let title = '';
-    const titleEl =
-      document.querySelector('div._44qnta') ||
-      document.querySelector('div.qaNIZv') ||
-      document.querySelector('h1.v-center') ||
-      document.querySelector('h1') ||
-      document.querySelector('div[class*="title"]') ||
-      document.querySelector('meta[property="og:title"]');
-
-    if (titleEl) {
-      title = titleEl.getAttribute('content') || titleEl.innerText || '';
-    }
-    if (!title && jsonLd && jsonLd.name) {
-      title = jsonLd.name;
-    }
-    title = title.replace(/\\s+/g, ' ').trim();
-
-    let price = 0;
-    const priceEl =
-      document.querySelector('div.pqTWkA') ||
-      document.querySelector('div._3n5z6N') ||
-      document.querySelector('div.Y3d6n1') ||
-      document.querySelector('div[class*="price"]') ||
-      document.querySelector('meta[property="product:price:amount"]');
-
-    if (priceEl) {
-      const rawPrice = priceEl.getAttribute('content') || priceEl.innerText || '';
-      price = parsePrice(rawPrice);
-    }
-    if (!price && jsonLd && jsonLd.offers) {
-      const offer = Array.isArray(jsonLd.offers) ? jsonLd.offers[0] : jsonLd.offers;
-      if (offer && offer.price) price = parseFloat(offer.price);
-    }
-
-    let shipping = 0;
-    const shipEl =
-      document.querySelector('div.W30k1z') ||
-      document.querySelector('div.shopee-drawer') ||
-      document.querySelector('div[class*="shipping"]');
-    if (shipEl) {
-      const text = shipEl.innerText.toLowerCase();
-      if (!text.includes('grátis') && !text.includes('free')) {
-        shipping = parsePrice(shipEl.innerText);
-      }
-    }
-
-    let image = '';
-    const imgEl =
-      document.querySelector('div.flex-1 img') ||
-      document.querySelector('img._2GchKS') ||
-      document.querySelector('img[class*="product-image"]') ||
-      document.querySelector('meta[property="og:image"]');
-    if (imgEl) {
-      image = imgEl.getAttribute('content') || imgEl.src || '';
-    }
-    if (!image && jsonLd && jsonLd.image) {
-      image = Array.isArray(jsonLd.image) ? jsonLd.image[0] : jsonLd.image;
-    }
+    const titleEl = document.querySelector('div._44qnta, div.qaNIZv, h1.v-center, h1, div[class*="title"]');
+    const title = titleEl ? (titleEl.innerText || '').trim() : '';
+    const priceEl = document.querySelector('div.pqTWkA, div._3n5z6N, div.Y3d6n1, div[class*="price"]');
+    const price = priceEl ? parsePrice(priceEl.innerText) : 0;
+    const shipEl = document.querySelector('div.W30k1z, div.shopee-drawer, div[class*="shipping"]');
+    const shipping = shipEl && !shipEl.innerText.toLowerCase().includes('grátis') ? parsePrice(shipEl.innerText) : 0;
+    const imgEl = document.querySelector('div.flex-1 img, img._2GchKS, img[class*="product-image"]');
+    const image = imgEl ? (imgEl.getAttribute('content') || imgEl.src || '') : '';
 
     const specs = {};
-    const specRows = document.querySelectorAll(
-      'div._2-5R_w, div.e8lZp3, div.pdp-params tr, div[class*="specification"] tr, div.a11y-specs-item'
-    );
-
-    specRows.forEach((row) => {
-      const labelEl = row.querySelector('label, th, div.label, span._2j2Q3c, div[class*="label"]');
-      const valEl = row.querySelector('div:not(.label), td, div.value, div._3y5X4B, div[class*="value"]');
-
-      if (labelEl && valEl) {
-        const k = labelEl.innerText.replace(/[:：]/g, '').trim();
-        const v = valEl.innerText.trim();
-        if (k && v) specs[k] = v;
+    let raw_specs = '';
+    document.querySelectorAll('div.page-product__detail tr, .section-product-specification tr, div._2-5R_w, div.e8lZp3, div.pdp-params tr').forEach(row => {
+      const label = row.querySelector('label, th, div.label, span._2j2Q3c');
+      const val = row.querySelector('div:not(.label), td:last-child, div.value');
+      if (label && val) {
+        const k = label.innerText.replace(/[:：]/g, '').trim();
+        const v = val.innerText.trim();
+        if (k && v && k !== v) specs[k] = v;
       }
     });
 
-    if (Object.keys(specs).length === 0) {
-      const descEl =
-        document.querySelector('div._3y5X4B') ||
-        document.querySelector('div.e8lZp3') ||
-        document.querySelector('div[class*="description"]');
-      if (descEl) {
-        const lines = descEl.innerText.split('\\n');
-        lines.forEach((line) => {
-          const match = line.match(/^[\\s\\-*•]?\\s*([^:：]+)[:：]\\s*(.+)$/);
-          if (match && match[1] && match[2]) {
-            specs[match[1].trim()] = match[2].trim();
-          }
-        });
+    if (Object.keys(specs).length > 0) {
+      raw_specs = Object.entries(specs).map(([k, v]) => \`- \${k}: \${v}\`).join('\\n');
+    }
+
+    if (!raw_specs || raw_specs.length < 30) {
+      const descEl = document.querySelector('div._3y5X4B, div.e8lZp3, div[class*="description"]');
+      if (descEl && descEl.innerText) {
+        raw_specs = descEl.innerText.trim().slice(0, 1500);
       }
     }
 
-    return {
-      platform: 'Shopee',
-      title: title || 'Produto Shopee',
-      price: price || 0,
-      shipping: shipping || 0,
-      image: image || '',
-      specs: specs,
-      url: window.location.href,
-    };
+    const selectedOptions = extractSelectedOptions();
+    if (!raw_specs || raw_specs.length < 20) {
+      raw_specs = \`Produto: \${title}\\nPreço: R$ \${price}\\n\${selectedOptions}\\nPlataforma: Shopee\`;
+    }
+
+    return { platform: 'Shopee', title, price, shipping, image, raw_specs, specs, url: window.location.href };
   }
 
   function extractAliExpress() {
-    const jsonLd = extractJsonLd();
-    let title = '';
-    const titleEl =
-      document.querySelector('h1[data-pl="product-title"]') ||
-      document.querySelector('.title--wrap--SnakKVb') ||
-      document.querySelector('div.product-title-text') ||
-      document.querySelector('h1') ||
-      document.querySelector('meta[property="og:title"]');
-
-    if (titleEl) {
-      title = titleEl.getAttribute('content') || titleEl.innerText || '';
-    }
-    if (!title && jsonLd && jsonLd.name) {
-      title = jsonLd.name;
-    }
-    title = title.replace(/\\s+/g, ' ').trim();
-
-    let price = 0;
-    const priceEl =
-      document.querySelector('.price--currentPriceText--2_2u_a') ||
-      document.querySelector('.product-price-current') ||
-      document.querySelector('.uniform-banner-box-price') ||
-      document.querySelector('.es--wrap--1gZ1kkg') ||
-      document.querySelector('span[class*="price"]') ||
-      document.querySelector('meta[property="og:price:amount"]');
-
-    if (priceEl) {
-      const rawPrice = priceEl.getAttribute('content') || priceEl.innerText || '';
-      price = parsePrice(rawPrice);
-    }
-    if (!price && jsonLd && jsonLd.offers) {
-      const offer = Array.isArray(jsonLd.offers) ? jsonLd.offers[0] : jsonLd.offers;
-      if (offer && offer.price) price = parseFloat(offer.price);
-    }
-
-    let shipping = 0;
-    const shipEl =
-      document.querySelector('.dynamic-shipping-title') ||
-      document.querySelector('.shipping-fee') ||
-      document.querySelector('.dynamic-shipping-line') ||
-      document.querySelector('.shipping--deliveryFee--') ||
-      document.querySelector('div[class*="shipping"]');
-
-    if (shipEl) {
-      const text = shipEl.innerText.toLowerCase();
-      if (!text.includes('grátis') && !text.includes('free')) {
-        shipping = parsePrice(shipEl.innerText);
-      }
-    }
-
-    let image = '';
-    const imgEl =
-      document.querySelector('.magnifier--image--l4hKqS_') ||
-      document.querySelector('.slider--img--') ||
-      document.querySelector('img[data-pl="product-image"]') ||
-      document.querySelector('meta[property="og:image"]');
-
-    if (imgEl) {
-      image = imgEl.getAttribute('content') || imgEl.src || '';
-    }
-    if (!image && jsonLd && jsonLd.image) {
-      image = Array.isArray(jsonLd.image) ? jsonLd.image[0] : jsonLd.image;
-    }
+    const titleEl = document.querySelector('h1[data-pl="product-title"], .title--wrap--SnakKVb, div.product-title-text, h1');
+    const title = titleEl ? (titleEl.innerText || '').trim() : '';
+    const priceEl = document.querySelector('.price--currentPriceText--2_2u_a, .product-price-current, .uniform-banner-box-price');
+    const price = priceEl ? parsePrice(priceEl.innerText) : 0;
+    const shipEl = document.querySelector('.dynamic-shipping-title, .shipping-fee, .dynamic-shipping-line');
+    const shipping = shipEl && !shipEl.innerText.toLowerCase().includes('grátis') ? parsePrice(shipEl.innerText) : 0;
+    const imgEl = document.querySelector('.magnifier--image--l4hKqS_, .slider--img--, img[data-pl="product-image"]');
+    const image = imgEl ? (imgEl.getAttribute('content') || imgEl.src || '') : '';
 
     const specs = {};
-    const propItems = document.querySelectorAll(
-      '#product-prop li, .specification--list-- li, .prop-item, .specification--propItem--, ul.product-prop-list li'
-    );
-
-    propItems.forEach((item) => {
-      const titleAttr = item.querySelector('.title, .specification--title--');
-      const descAttr = item.querySelector('.desc, .specification--desc--');
-      if (titleAttr && descAttr) {
-        const k = titleAttr.innerText.replace(/[:：]/g, '').trim();
-        const v = descAttr.innerText.trim();
+    let raw_specs = '';
+    document.querySelectorAll('[data-spm="specification"] li, .specification--prop li, ul.product-specs li, #product-prop li').forEach(item => {
+      const t = item.querySelector('.title, .specification--title--');
+      const d = item.querySelector('.desc, .specification--desc--');
+      if (t && d) {
+        const k = t.innerText.replace(/[:：]/g, '').trim();
+        const v = d.innerText.trim();
         if (k && v) specs[k] = v;
       }
     });
 
-    return {
-      platform: 'AliExpress',
-      title: title || 'Produto AliExpress',
-      price: price || 0,
-      shipping: shipping || 0,
-      image: image || '',
-      specs: specs,
-      url: window.location.href,
-    };
-  }
+    if (Object.keys(specs).length > 0) {
+      raw_specs = Object.entries(specs).map(([k, v]) => \`- \${k}: \${v}\`).join('\\n');
+    }
 
-  function extractProductData() {
-    const host = window.location.hostname.toLowerCase();
-    if (host.includes('shopee')) return extractShopee();
-    if (host.includes('aliexpress')) return extractAliExpress();
-    return {
-      platform: 'Outro',
-      title: document.title || 'Produto Capturado',
-      price: 0,
-      shipping: 0,
-      image: '',
-      specs: {},
-      url: window.location.href,
-    };
-  }
-
-  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === 'EXTRACT_PRODUCT_DATA') {
-      try {
-        const data = extractProductData();
-        sendResponse({ success: true, data });
-      } catch (err) {
-        sendResponse({ success: false, error: err.message });
+    if (!raw_specs || raw_specs.length < 30) {
+      const descEl = document.querySelector('.detail-desc-decorate-richtext, #product-description, div[class*="description"]');
+      if (descEl && descEl.innerText) {
+        raw_specs = descEl.innerText.trim().slice(0, 1500);
       }
+    }
+
+    const selectedOptions = extractSelectedOptions();
+    if (!raw_specs || raw_specs.length < 20) {
+      raw_specs = \`Produto: \${title}\\nPreço: R$ \${price}\\n\${selectedOptions}\\nPlataforma: AliExpress\`;
+    }
+
+    return { platform: 'AliExpress', title, price, shipping, image, raw_specs, specs, url: window.location.href };
+  }
+
+  chrome.runtime.onMessage.addListener((req, sender, sendRes) => {
+    if (req.action === 'EXTRACT_PRODUCT_DATA') {
+      const host = window.location.hostname.toLowerCase();
+      const data = host.includes('shopee') ? extractShopee() : extractAliExpress();
+      sendRes({ success: true, data });
     }
     return true;
   });
@@ -331,19 +193,19 @@ export const ExtensionFilesViewer: React.FC = () => {
     },
     {
       filename: 'sidepanel.js',
-      description: 'Controlador do SidePanel com gestão dos 5 slots no chrome.storage.local, motor de normalização e renderização.',
+      description: 'Renderização dinâmica da specs_matrix, fallback por título e exportação completa de relatório.',
       language: 'javascript',
-      code: `// Código completo em /extension/sidepanel.js (Gestão dos 5 slots e Matriz Canónica)`,
+      code: `// Código completo em /extension/sidepanel.js (Gestão dos 5 slots, specs_matrix e Prompt Gemini)`,
     },
     {
       filename: 'sidepanel.html',
-      description: 'Layout HTML do SidePanel com suporte a até 5 slots simultâneos.',
+      description: 'Layout HTML do SidePanel com área para matriz canônica e scroll horizontal.',
       language: 'html',
       code: `<!-- Código completo em /extension/sidepanel.html -->`,
     },
     {
       filename: 'background.js',
-      description: 'Service Worker Manifest V3 para acionar o SidePanel e inicializar o storage.',
+      description: 'Service Worker Manifest V3 para sidePanel e inicialização de storage.',
       language: 'javascript',
       code: `chrome.runtime.onInstalled.addListener(() => {
   if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
@@ -358,7 +220,7 @@ export const ExtensionFilesViewer: React.FC = () => {
     },
     {
       filename: 'README.md',
-      description: 'Guia de instalação no Google Chrome em modo desenvolvedor.',
+      description: 'Instruções de instalação e teste no Google Chrome.',
       language: 'markdown',
       code: `# Como Carregar a Extensão no Chrome:
 1. Acesse chrome://extensions/

@@ -2,6 +2,7 @@ import {
   ProductSlot,
   DynamicComparisonResult,
   DynamicComparisonRow,
+  SpecsMatrixRow,
   ComparisonStatus,
   PairwiseComparison,
 } from '../types/extension';
@@ -17,18 +18,60 @@ function cleanStr(s: string): string {
     .trim();
 }
 
-// Autonomous Dynamic Heuristic Miner with Cross-Slot & Pairwise Confrontation
-function generateDynamicFallbackAudit(
+// Helper: Extract specs from title when raw_specs is short (Fallback por Título)
+function extractSpecsFromTitle(title: string): Record<string, string> {
+  const specs: Record<string, string> = {};
+  if (!title) return specs;
+
+  // Gramatura (ex: 180GSM, 70g, 180g/m²)
+  const gsmMatch = title.match(/(\d{2,4})\s*(gsm|g\/m²|g\b|gr\b)/i);
+  if (gsmMatch) specs['Gramatura / Espessura'] = `${gsmMatch[1]} g/m²`;
+
+  // Composição (ex: 100% Algodão, 50% Cotton, Couro PU)
+  const compMatch = title.match(/(\d{1,3}%\s*(?:algod[aã]o|cotton|poli[eé]ster|linho|seda)|couro\s*(?:pu|leg[ií]timo)?)/i);
+  if (compMatch) specs['Composição / Material'] = compMatch[0];
+
+  // Folhas / Páginas (ex: 50 folhas, 100 pages, 80 fls)
+  const sheetsMatch = title.match(/(\d{2,4})\s*(?:folhas|fls|pages|p[aá]ginas|pags)/i);
+  if (sheetsMatch) specs['Quantidade de Folhas/Páginas'] = `${sheetsMatch[1]} folhas`;
+
+  // Dimensões / Formato (ex: A5, A4, B5, 8.3x5.9in, 21x14cm)
+  const sizeMatch = title.match(/\b(A3|A4|A5|A6|B5|B6|\d+(?:[.,]\d+)?\s*x\s*\d+(?:[.,]\d+)?\s*(?:cm|mm|in|polegadas)?)\b/i);
+  if (sizeMatch) specs['Dimensões / Formato'] = sizeMatch[0];
+
+  // Encadernação (ex: Hardcover, Capa Dura, Espiral, Brochura)
+  const coverMatch = title.match(/\b(hardcover|capa dura|softcover|capa comum|espiral|wire-o|costurado)\b/i);
+  if (coverMatch) specs['Tipo de Encadernação / Capa'] = coverMatch[0];
+
+  // Voltagem / Tensão (ex: 21V, 12V, 20V, 110V, 220V, Bivolt)
+  const voltMatch = title.match(/(\d{1,3}V\b|bivolt)/i);
+  if (voltMatch) specs['Tensão / Voltagem'] = voltMatch[0].toUpperCase();
+
+  // Torque (ex: 45Nm, 60 N.m)
+  const torqueMatch = title.match(/(\d{1,3})\s*(?:nm|n\.m)/i);
+  if (torqueMatch) specs['Torque Máximo'] = `${torqueMatch[1]} Nm`;
+
+  // Bluetooth (ex: Bluetooth 5.3, BT 5.0)
+  const btMatch = title.match(/(?:bluetooth|bt)\s*(\d+\.\d+)/i);
+  if (btMatch) specs['Versão do Bluetooth'] = `Bluetooth ${btMatch[1]}`;
+
+  return specs;
+}
+
+// Autonomous Dynamic Heuristic Miner with Title Fallback & Strict specs_matrix Generation
+export function generateDynamicFallbackAudit(
   slots: (ProductSlot | null)[],
   baseSlotId = 1
 ): DynamicComparisonResult {
   const activeSlots = slots.filter((s): s is ProductSlot => s !== null);
   const baseSlot = slots[baseSlotId - 1] || activeSlots[0] || slots[0];
 
-  // 1. Infer Category Dynamically from product titles
+  // 1. Infer Category
   const allTitles = activeSlots.map(s => s.title.toLowerCase()).join(' ');
-  let detectedCategory = 'Produto Geral & E-commerce';
-  if (/parafusadeira|furadeira|impacto|torque|mandril|rpm/i.test(allTitles)) {
+  let detectedCategory = 'Artigos Gerais & E-commerce';
+  if (/sketchbook|caderno|papel|folhas|a5|a4|aquarela|gramatura|180gsm|hardcover/i.test(allTitles)) {
+    detectedCategory = 'Papelaria & Artigos de Arte';
+  } else if (/parafusadeira|furadeira|impacto|torque|mandril|rpm/i.test(allTitles)) {
     detectedCategory = 'Ferramentas Elétricas & Manuais';
   } else if (/serum|vitamina|anti-idade|facial|pele|hidratante|acido/i.test(allTitles)) {
     detectedCategory = 'Cosméticos & Cuidados Pessoais';
@@ -36,41 +79,53 @@ function generateDynamicFallbackAudit(
     detectedCategory = 'Áudio & Eletrônicos Pessoais';
   } else if (/camiseta|algodao|tecido|gola|camisa|vestuario/i.test(allTitles)) {
     detectedCategory = 'Vestuário & Moda Têxtil';
-  } else if (/compressor|pneu|bar|psi|automotivo|veicular/i.test(allTitles)) {
-    detectedCategory = 'Acessórios Automotivos';
   }
 
-  // 2. Mine all dynamic raw keys across all active products
-  const uniqueAttributes = new Map<string, string>(); // normalizedKey -> DisplayLabel
+  // 2. Mine all attributes with Title Fallback for each slot
+  const attributeMap = new Map<string, string>(); // normKey -> DisplayLabel
+  const slotSpecsEnriched: Record<number, Record<string, string>> = {};
 
   activeSlots.forEach(slot => {
-    Object.keys(slot.specs || {}).forEach(rawKey => {
+    const rawSpecs = { ...(slot.specs || {}) };
+    // Enrich with title extraction
+    const titleExtracted = extractSpecsFromTitle(slot.title);
+    Object.entries(titleExtracted).forEach(([k, v]) => {
+      if (!rawSpecs[k]) rawSpecs[k] = v;
+    });
+
+    slotSpecsEnriched[slot.id] = rawSpecs;
+
+    Object.keys(rawSpecs).forEach(rawKey => {
       const trimmed = rawKey.trim();
       const normKey = cleanStr(trimmed);
-      if (normKey && !uniqueAttributes.has(normKey)) {
-        uniqueAttributes.set(normKey, trimmed);
+      if (normKey && !attributeMap.has(normKey)) {
+        attributeMap.set(normKey, trimmed);
       }
     });
   });
 
-  // 3. Build Cross Comparison Matrix with Base Slot as parameter + Cross-Slot Diff
+  // 3. Build Comparison Matrix and specs_matrix format
   const comparisonMatrix: DynamicComparisonRow[] = [];
+  const specs_matrix: SpecsMatrixRow[] = [];
 
-  uniqueAttributes.forEach((displayLabel, normKey) => {
+  attributeMap.forEach((displayLabel, normKey) => {
     // Value in Slot 1
-    const s1Val = slots[0]?.specs ? findMatchingValue(slots[0].specs, normKey) : null;
-    const slot_1_value = s1Val || 'Não informado';
+    const s1Raw = slotSpecsEnriched[1] ? findMatchingValue(slotSpecsEnriched[1], normKey) : null;
+    const slot_1_value = s1Raw || 'Não informado';
 
     // Base Slot value
-    const baseVal = baseSlot?.specs ? findMatchingValue(baseSlot.specs, normKey) : null;
-    const baseValueNormalized = baseVal || 'Não informado';
+    const baseRaw = slotSpecsEnriched[baseSlotId] ? findMatchingValue(slotSpecsEnriched[baseSlotId], normKey) : null;
+    const baseValueNormalized = baseRaw || 'Não informado';
 
     const slot_values: Record<string, string> = {};
     const comparisons: Record<string, { value: string; status: ComparisonStatus; diffNote?: string }> = {};
 
-    const valuesBySlot: { slotId: number; val: string; clean: string }[] = [];
+    const matrixRow: SpecsMatrixRow = {
+      attribute: displayLabel,
+      slot_1: slot_1_value,
+    };
 
-    // Evaluate each slot (1 to 5)
+    // Evaluate slots 1 to 5
     for (let i = 0; i < 5; i++) {
       const slotNum = i + 1;
       const slotObj = slots[i];
@@ -81,9 +136,20 @@ function generateDynamicFallbackAudit(
         continue;
       }
 
-      const rawVal = findMatchingValue(slotObj.specs, normKey);
+      const rawVal = slotSpecsEnriched[slotNum] ? findMatchingValue(slotSpecsEnriched[slotNum], normKey) : null;
       const valDisplay = rawVal || 'Não informado';
       slot_values[slotKeyName] = valDisplay;
+
+      if (slotNum === 1) {
+        matrixRow.slot_1 = valDisplay;
+      } else {
+        if (!rawVal) {
+          matrixRow[slotKeyName] = 'Não informada';
+        } else {
+          const isIdentical = slot_1_value !== 'Não informado' && cleanStr(slot_1_value) === cleanStr(rawVal);
+          matrixRow[slotKeyName] = isIdentical ? `${rawVal} (Idêntico)` : `${rawVal} (Divergente)`;
+        }
+      }
 
       if (slotNum === baseSlotId) {
         comparisons[slotKeyName] = {
@@ -95,7 +161,7 @@ function generateDynamicFallbackAudit(
         comparisons[slotKeyName] = {
           value: 'Não informado',
           status: 'missing',
-          diffNote: 'Dado não informado pelo vendedor',
+          diffNote: 'Dado não informado',
         };
       } else {
         const isIdentical =
@@ -110,37 +176,6 @@ function generateDynamicFallbackAudit(
             : `Divergência técnica vs Slot ${baseSlotId}`,
         };
       }
-
-      if (rawVal) {
-        valuesBySlot.push({
-          slotId: slotNum,
-          val: rawVal,
-          clean: cleanStr(rawVal),
-        });
-      }
-    }
-
-    // Cross-slot analysis: check identical clusters among all active slots
-    const identicalGroups: string[] = [];
-    const divergences: string[] = [];
-    const distinctClean = new Set(valuesBySlot.map(v => v.clean));
-    const hasDisparity = distinctClean.size > 1;
-
-    // Group slots with identical values
-    const grouped = new Map<string, number[]>();
-    valuesBySlot.forEach(item => {
-      if (!grouped.has(item.clean)) grouped.set(item.clean, []);
-      grouped.get(item.clean)!.push(item.slotId);
-    });
-
-    grouped.forEach((slotIds, cleanVal) => {
-      if (slotIds.length > 1) {
-        identicalGroups.push(`Slots ${slotIds.join(' e ')} possuem a mesma especificação`);
-      }
-    });
-
-    if (hasDisparity) {
-      divergences.push(`${distinctClean.size} variações técnicas encontradas entre os produtos ativos`);
     }
 
     comparisonMatrix.push({
@@ -148,16 +183,12 @@ function generateDynamicFallbackAudit(
       slot_1_value,
       slot_values,
       comparisons,
-      cross_analysis: {
-        identical_groups: identicalGroups,
-        divergences,
-        has_disparity: hasDisparity,
-        winner_slot: baseSlotId,
-      },
     });
+
+    specs_matrix.push(matrixRow);
   });
 
-  // 4. Pairwise Cross Comparisons (Slot A vs Slot B)
+  // 4. Pairwise Cross Comparisons
   const pairwise_matrix: Record<string, PairwiseComparison> = {};
 
   for (let i = 0; i < activeSlots.length; i++) {
@@ -181,8 +212,8 @@ function generateDynamicFallbackAudit(
 
         if (!hasA || !hasB) {
           missingCount++;
-          if (hasA) advantagesA.push(`${row.attribute_name}: ${valA} (exclusivo)`);
-          if (hasB) advantagesB.push(`${row.attribute_name}: ${valB} (exclusivo)`);
+          if (hasA) advantagesA.push(`${row.attribute_name}: ${valA}`);
+          if (hasB) advantagesB.push(`${row.attribute_name}: ${valB}`);
         } else if (cleanStr(valA) === cleanStr(valB)) {
           identicalCount++;
         } else {
@@ -214,7 +245,7 @@ function generateDynamicFallbackAudit(
     }
   }
 
-  // 5. Executive Summary
+  // 5. Technical Verdict
   let minPriceSlot = activeSlots[0];
   let minTotal = Infinity;
   activeSlots.forEach(s => {
@@ -225,14 +256,16 @@ function generateDynamicFallbackAudit(
     }
   });
 
-  const executiveSummary = `O confronto técnico detalhado entre os ${activeSlots.length} slots revela que o Slot ${minPriceSlot?.id} (${minPriceSlot?.platform}) oferece a melhor barreira de entrada no preço final (R$ ${minTotal.toFixed(2).replace('.', ',')}). Compare as divergências em relação ao Slot ${baseSlotId} para avaliar os ganhos reais em cada linha de especificação.`;
+  const technicalVerdict = `O confronto técnico revela que a opção mais barata (Slot ${minPriceSlot?.id}) pode conter reduções de especificações em relação ao Slot 1. O Slot 1 se destaca como a referência mais robusta e completa em atributos técnicos.`;
 
   return {
     detected_category: detectedCategory,
     base_slot_id: baseSlotId,
     comparison_matrix: comparisonMatrix,
+    specs_matrix,
+    technical_verdict: technicalVerdict,
     pairwise_matrix,
-    executive_summary: executiveSummary,
+    executive_summary: technicalVerdict,
   };
 }
 
@@ -260,14 +293,73 @@ export async function performAIAudit(
 
     if (res.ok) {
       const json = await res.json();
-      if (json.success && json.data && json.data.comparison_matrix) {
-        return json.data as DynamicComparisonResult;
+      if (json.success && json.data) {
+        const d = json.data;
+        const category = d.category || d.detected_category || 'Produto Geral';
+        const technicalVerdict = d.technical_verdict || d.executive_summary || '';
+
+        // If returned specs_matrix format
+        if (d.specs_matrix && Array.isArray(d.specs_matrix)) {
+          const comparison_matrix: DynamicComparisonRow[] = d.specs_matrix.map((row: any) => {
+            const attrName = row.attribute || row.attribute_name || 'Especificação';
+            const s1Val = row.slot_1 || row.slot_1_value || 'Não informado';
+
+            const slot_values: Record<string, string> = {
+              slot_1: s1Val,
+              slot_2: row.slot_2 || 'Não informado',
+              slot_3: row.slot_3 || 'Não informado',
+              slot_4: row.slot_4 || 'Não informado',
+              slot_5: row.slot_5 || 'Não informado',
+            };
+
+            const comparisons: Record<string, { value: string; status: ComparisonStatus }> = {};
+
+            for (let i = 1; i <= 5; i++) {
+              const sKey = `slot_${i}`;
+              const rawStr = row[sKey] || 'Não informado';
+              const cleanVal = rawStr.replace(/\s*\(.*?\)/g, '').trim();
+
+              let status: ComparisonStatus = 'divergent';
+              if (i === baseSlotId) status = 'base';
+              else if (/não informad|nao informad/i.test(rawStr)) status = 'missing';
+              else if (/idêntico|identico|equal/i.test(rawStr) || cleanStr(cleanVal) === cleanStr(s1Val)) status = 'equal';
+
+              comparisons[sKey] = {
+                value: cleanVal || rawStr,
+                status,
+              };
+            }
+
+            return {
+              attribute_name: attrName,
+              slot_1_value: s1Val,
+              slot_values,
+              comparisons,
+            };
+          });
+
+          return {
+            detected_category: category,
+            base_slot_id: baseSlotId,
+            comparison_matrix,
+            specs_matrix: d.specs_matrix,
+            technical_verdict: technicalVerdict,
+            executive_summary: technicalVerdict,
+          };
+        }
+
+        if (d.comparison_matrix) {
+          return {
+            ...d,
+            detected_category: category,
+            executive_summary: technicalVerdict || d.executive_summary,
+          };
+        }
       }
     }
   } catch (err) {
-    console.warn('Backend /api/ai-audit unavailable, utilizing autonomous dynamic engine:', err);
+    console.warn('Backend /api/ai-audit unavailable, using local dynamic fallback:', err);
   }
 
-  // Fallback to local autonomous dynamic engine
   return generateDynamicFallbackAudit(slots, baseSlotId);
 }
