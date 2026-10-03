@@ -5,6 +5,9 @@ import {
   SpecsMatrixRow,
   ComparisonStatus,
   PairwiseComparison,
+  SlotComparisonItem,
+  SpecAIInterpretation,
+  SlotScore,
 } from '../types/extension';
 
 // Helper: Normalize string for comparison (strips accents, punctuation and repeated spaces)
@@ -104,6 +107,7 @@ export const SYNONYM_MAP: Record<string, string> = {
   'tensao da bateria': 'Tensão / Voltagem',
   'voltagem': 'Tensão / Voltagem',
   'tensao': 'Tensão / Voltagem',
+  'capacidade da bateria': 'Capacidade da Bateria',
   'bateria': 'Capacidade da Bateria',
   'funcao impacto': 'Função de Impacto',
   'funcao de impacto': 'Função de Impacto',
@@ -118,7 +122,6 @@ export const SYNONYM_MAP: Record<string, string> = {
   'cancelamento de ruido': 'Cancelamento de Ruído (ANC)',
   'cancelamento ativo': 'Cancelamento de Ruído (ANC)',
   'anc': 'Cancelamento de Ruído (ANC)',
-  'capacidade da bateria': 'Capacidade da Bateria',
   'autonomia de bateria': 'Autonomia de Reprodução',
   'autonomia': 'Autonomia de Reprodução',
   'drivers de som': 'Driver de Áudio',
@@ -181,6 +184,30 @@ export const SYNONYM_MAP: Record<string, string> = {
   'certificacao': 'Certificação / Homologação',
 };
 
+// Determina a categoria temática da especificação
+export function categorizeAttribute(attrName: string): string {
+  const clean = cleanStr(attrName);
+  if (/compatibilidade|veiculo|modelo|ano|montadora|aplicacao|oem|part number/i.test(clean)) {
+    return 'Compatibilidade & Aplicação';
+  }
+  if (/torque|motor|potencia|velocidade|rpm|impacto|driver|processador|memoria|ram|fps/i.test(clean)) {
+    return 'Desempenho & Potência';
+  }
+  if (/bateria|voltagem|tensao|autonomia|recarga|alimentacao|carregamento/i.test(clean)) {
+    return 'Alimentação & Bateria';
+  }
+  if (/material|composicao|gramatura|resistencia|protecao|textura|dimensoes|formato|peso|tela|display|gola|tecido/i.test(clean)) {
+    return 'Construção & Proteção';
+  }
+  if (/itens inclusos|acessorios|conteudo|folhas|mandril|maleta|case|estojo|embalagem/i.test(clean)) {
+    return 'Acessórios & Conteúdo';
+  }
+  if (/garantia|marca|fabricante|origem|certificacao|procedencia|condicao/i.test(clean)) {
+    return 'Garantia & Procedência';
+  }
+  return 'Especificações Gerais';
+}
+
 export function canonicalizeAttributeName(rawKey: string): string {
   if (!rawKey) return '';
   const trimmed = rawKey.trim();
@@ -189,67 +216,66 @@ export function canonicalizeAttributeName(rawKey: string): string {
     return SYNONYM_MAP[cleanKey];
   }
   return trimmed
-    .replace(/[_\-]+/g, ' ')
+    .replace(/[_-]+/g, ' ')
     .split(' ')
     .filter(Boolean)
     .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
     .join(' ');
 }
 
-/**
- * Analisador Dinâmico e Agnóstico de Especificações
- * Minera especificações estruturadas, descritivas e heurísticas para qualquer nicho
- */
-export function analyzeProductSpecs(slot: ProductSlot): Record<string, string> {
-  const specs: Record<string, string> = {};
-  if (!slot) return specs;
+// Regexes otimizadas para mineração heurística
+const KV_LINE_REGEX = /^[\s*•#-]?\s*([^:：]{2,35})[:：]\s*(.{2,120})$/;
+const AUTOMAKER_REGEX = /\b(Volkswagen|VW|Chevrolet|GM|Fiat|Ford|Toyota|Honda|Hyundai|Renault|Nissan|Jeep|Peugeot|Citro[eë]n|Mitsubishi|BMW|Mercedes(?:-Benz)?|Audi)\b/i;
+const CAR_MODEL_REGEX = /\b(Gol|Voyage|Saveiro|Fox|Parati|CrossFox|Polo|Golf|Virtus|Nivus|T-Cross|Corsa|Celta|Onix|Prisma|Astra|Vectra|Montana|Spin|Tracker|Palio|Uno|Siena|Strada|Mobi|Argo|Cronos|Toro|Punto|Ka|Fiesta|EcoSport|Focus|Ranger|Civic|Fit|City|HR-V|CR-V|Corolla|Yaris|Hilux|Etios|HB20|Creta|Sandero|Logan|Duster|Kicks|March|Renegade|Compass)(\s*G[1-8])?\b/i;
+const YEAR_REGEX = /\b(?:(?:19|20)\d{2}\s*(?:a|ate|-|\/)\s*(?:19|20)\d{2}|(?:19|20)\d{2}\+|anos?\s*(?:19|20)\d{2}(?:\s*a\s*(?:19|20)\d{2})?)\b/i;
+const POS_REGEX = /\b(par dianteiro|par traseiro|dianteir[oa]|traseir[oa]|diant\b|tras\b|esquerd[oa]|direit[oa]|superior|inferior|traseiro\/dianteiro)\b/i;
+const OEM_REGEX = /\b(?:OEM|c[oó]d(?:igo)?(?:\s*(?:original|pe[cç]a))?|part\s*number)[:\s]*([A-Z0-9.-]{5,18})\b/i;
+const GSM_REGEX = /(\d{2,4})\s*(gsm|g\/m²|g\/m2|g\b|gr\b)/i;
+const SHEETS_REGEX = /(\d{1,4})\s*(?:folhas|fls|pages|p[aá]ginas|pags|sheets)\b/i;
+const TORQUE_REGEX = /(\d{1,3})\s*(?:nm|n\.m|newton(?:\s*metros)?)\b/i;
+const VOLTAGE_REGEX = /\b(\d{1,2}(?:\.\d)?)\s*(?:v|volts|v\s*max)\b/i;
+const BRUSHLESS_REGEX = /\b(brushless|sem\s*escovas?|motor\s*de\s*inducao)\b/i;
 
-  // 1. Incorpora especificações estruturadas
-  if (slot.specs && typeof slot.specs === 'object') {
-    for (const [k, v] of Object.entries(slot.specs)) {
-      if (k && v && typeof v === 'string' && v.trim().length > 0) {
-        specs[canonicalizeAttributeName(k)] = v.trim();
+function extractStructuredSpecs(slotSpecs: Record<string, string>, specs: Record<string, string>): void {
+  for (const [k, v] of Object.entries(slotSpecs)) {
+    if (k && typeof v === 'string' && v.trim().length > 0) {
+      specs[canonicalizeAttributeName(k)] = v.trim();
+    }
+  }
+}
+
+function extractKeyValueLines(textSource: string, specs: Record<string, string>): void {
+  const lines = textSource.split('\n');
+  for (const line of lines) {
+    const match = KV_LINE_REGEX.exec(line);
+    if (match) {
+      const rawK = match[1].trim();
+      const rawV = match[2].trim();
+      if (!/^(https?|www|http|image|html|slot|preco|frete|link)/i.test(rawK)) {
+        const canonical = canonicalizeAttributeName(rawK);
+        if (!specs[canonical]) specs[canonical] = rawV;
       }
     }
   }
+}
 
-  // 2. Minera linhas Chave: Valor do texto
-  const textSource = [slot.raw_specs, slot.rawText].filter(Boolean).join('\n');
-  if (textSource) {
-    const lines = textSource.split('\n');
-    for (const line of lines) {
-      const match = line.match(/^[\s\-*•#]?\s*([^:：]{2,35})[:：]\s*(.{2,120})$/);
-      if (match) {
-        const rawK = match[1].trim();
-        const rawV = match[2].trim();
-        if (!/^(https?|www|http|image|html|slot|preco|frete|link)/i.test(rawK)) {
-          const canonical = canonicalizeAttributeName(rawK);
-          if (!specs[canonical]) specs[canonical] = rawV;
-        }
-      }
-    }
-  }
-
-  // 3. Heurística Inteligente Universal (Autopeças, Papéis, Ferramentas, etc.)
-  const fullText = `${slot.title || ''} ${textSource}`.trim();
-
-  // --- AUTOPEÇAS & VEÍCULOS ---
-  const automakerMatch = fullText.match(/\b(Volkswagen|VW|Chevrolet|GM|Fiat|Ford|Toyota|Honda|Hyundai|Renault|Nissan|Jeep|Peugeot|Citro[eë]n|Mitsubishi|BMW|Mercedes(?:-Benz)?|Audi)\b/i);
+function extractAutomotiveSpecs(fullText: string, specs: Record<string, string>): void {
+  const automakerMatch = AUTOMAKER_REGEX.exec(fullText);
   if (automakerMatch && !specs['Montadora / Fabricante do Veículo']) {
     specs['Montadora / Fabricante do Veículo'] = automakerMatch[0].toUpperCase() === 'VW' ? 'Volkswagen (VW)' : automakerMatch[0];
   }
 
-  const carModelMatch = fullText.match(/\b((?:Gol|Voyage|Saveiro|Fox|Parati|CrossFox|Polo|Golf|Virtus|Nivus|T-Cross)(?:\s*G[1-8])?|(?:Corsa|Celta|Onix|Prisma|Astra|Vectra|Montana|Spin|Tracker)|(?:Palio|Uno|Siena|Strada|Mobi|Argo|Cronos|Toro|Punto)|(?:Ka|Fiesta|EcoSport|Focus|Ranger)|(?:Civic|Fit|City|HR-V|CR-V)|(?:Corolla|Yaris|Hilux|Etios)|(?:HB20|Creta)|(?:Sandero|Logan|Duster|Kicks|March|Renegade|Compass))\b/i);
+  const carModelMatch = CAR_MODEL_REGEX.exec(fullText);
   if (carModelMatch && !specs['Compatibilidade / Veículos']) {
     specs['Compatibilidade / Veículos'] = carModelMatch[0];
   }
 
-  const yearMatch = fullText.match(/\b((?:19\d\d|20\d\d)\s*(?:a|ate|-|\/)\s*(?:19\d\d|20\d\d)|\b(?:19\d\d|20\d\d)\+|\bano[s]?\s*(?:19\d\d|20\d\d)(?:\s*a\s*(?:19\d\d|20\d\d))?)\b/i);
+  const yearMatch = YEAR_REGEX.exec(fullText);
   if (yearMatch && !specs['Ano / Compatibilidade']) {
     specs['Ano / Compatibilidade'] = yearMatch[0];
   }
 
-  const posMatch = fullText.match(/\b(par dianteiro|par traseiro|dianteir[oa]|traseir[oa]|diant\b|tras\b|esquerd[oa]|direit[oa]|superior|inferior|traseiro\/dianteiro)\b/i);
+  const posMatch = POS_REGEX.exec(fullText);
   if (posMatch && !specs['Posição / Lado de Montagem']) {
     const rawPos = posMatch[0].toLowerCase();
     let normPos = posMatch[0];
@@ -258,161 +284,225 @@ export function analyzeProductSpecs(slot: ProductSlot): Record<string, string> {
     specs['Posição / Lado de Montagem'] = normPos;
   }
 
-  const oemMatch = fullText.match(/\b(?:OEM|c[oó]d(?:igo)?(?:\s*original|\s*pe[cç]a)?|part\s*number)[:\s]*([A-Z0-9.\-]{5,18})\b/i);
+  const oemMatch = OEM_REGEX.exec(fullText);
   if (oemMatch && !specs['Código da Peça / OEM']) {
     specs['Código da Peça / OEM'] = oemMatch[1];
   }
+}
 
-  const partsBrandMatch = fullText.match(/\b(Bosch|Cofap|Nakata|Fras-le|TRW|Cobreq|Mahle|Magneti Marelli|Valeo|NGK|Delphi|Denso|Monroe|Sachs|Hipper Freios|Willtec|Dayco|Gates|Continental|Contitech|SKF)\b/i);
-  if (partsBrandMatch && !specs['Marca / Fabricante']) {
-    specs['Marca / Fabricante'] = partsBrandMatch[0];
-  }
-
-  const partTypeMatch = fullText.match(/\b(pastilha(?:s)? de freio|disco(?:s)? de freio|amortecedor(?:es)?|vela(?:s)? de igni[cç][aã]o|filtro de [oó]leo|filtro de ar|filtro de combust[ií]vel|correia dentada|bomba d['’]?[aá]gua|bomba de combust[ií]vel|radiador|sensor de oxig[eê]nio|terminal de dire[cç][aã]o|piv[oô] de suspens[aã]o)\b/i);
-  if (partTypeMatch && !specs['Tipo de Peça / Aplicação']) {
-    specs['Tipo de Peça / Aplicação'] = partTypeMatch[0].charAt(0).toUpperCase() + partTypeMatch[0].slice(1).toLowerCase();
-  }
-
-  const partMatMatch = fullText.match(/\b(cer[aâ]mica|semi-met[aá]lica|org[aâ]nica|met[aá]lica|a[cç]o carbono|alum[ií]nio|ferro fundido)\b/i);
-  if (partMatMatch && !specs['Material / Composição']) {
-    specs['Material / Composição'] = partMatMatch[0].charAt(0).toUpperCase() + partMatMatch[0].slice(1).toLowerCase();
-  }
-
-  // --- PAPELARIA & LIVROS ---
-  const gsmMatch = fullText.match(/(\d{2,4})\s*(gsm|g\/m²|g\/m2|g\b|gr\b)/i);
+function extractStationeryAndToolsSpecs(fullText: string, specs: Record<string, string>): void {
+  const gsmMatch = GSM_REGEX.exec(fullText);
   if (gsmMatch && !specs['Gramatura / Espessura']) {
     specs['Gramatura / Espessura'] = `${gsmMatch[1]} g/m²`;
   }
 
-  const sheetsMatch = fullText.match(/(\d{1,4})\s*(?:folhas|fls|pages|p[aá]ginas|pags|sheets)\b/i);
+  const sheetsMatch = SHEETS_REGEX.exec(fullText);
   if (sheetsMatch && !specs['Quantidade de Folhas / Páginas']) {
     specs['Quantidade de Folhas / Páginas'] = `${sheetsMatch[1]} folhas`;
   }
 
-  const sizeMatch = fullText.match(/\b(A2|A3|A4|A5|A6|B4|B5|B6|\d+(?:[.,]\d+)?\s*x\s*\d+(?:[.,]\d+)?\s*(?:cm|mm|in|polegadas)?)\b/i);
-  if (sizeMatch && !specs['Dimensões / Formato']) {
-    specs['Dimensões / Formato'] = sizeMatch[0].toUpperCase();
-  }
-
-  const paperCompMatch = fullText.match(/(\d{1,3}%\s*(?:algod[aã]o|cotton|celulose|poli[eé]ster)|100%\s*celulose|papel\s*kraft|papel\s*couch[eê]|couro\s*(?:pu|leg[ií]timo)?)/i);
-  if (paperCompMatch && !specs['Composição / Fibra'] && !specs['Material / Composição']) {
-    specs['Composição / Fibra'] = paperCompMatch[0];
-  }
-
-  const coverMatch = fullText.match(/\b(hardcover|capa dura|softcover|capa comum|espiral|wire-o|costurado|brochura)\b/i);
-  if (coverMatch && !specs['Tipo de Capa / Encadernação']) {
-    specs['Tipo de Capa / Encadernação'] = coverMatch[0].toLowerCase().includes('hardcover') || coverMatch[0].toLowerCase().includes('capa dura')
-      ? 'Capa Dura (Hardcover)'
-      : coverMatch[0];
-  }
-
-  // --- FERRAMENTAS & ELETRÔNICOS ---
-  const voltMatch = fullText.match(/(\b\d{1,3}V\b|bivolt|110V|220V)/i);
-  if (voltMatch && !specs['Tensão / Voltagem']) {
-    specs['Tensão / Voltagem'] = voltMatch[0].toUpperCase();
-  }
-
-  const torqueMatch = fullText.match(/(\d{1,3})\s*(?:nm|n\.m)/i);
+  const torqueMatch = TORQUE_REGEX.exec(fullText);
   if (torqueMatch && !specs['Torque Máximo']) {
     specs['Torque Máximo'] = `${torqueMatch[1]} Nm`;
   }
 
-  const btMatch = fullText.match(/(?:bluetooth|bt)\s*(\d+\.\d+)/i);
-  if (btMatch && !specs['Versão do Bluetooth']) {
-    specs['Versão do Bluetooth'] = `Bluetooth ${btMatch[1]}`;
+  const voltageMatch = VOLTAGE_REGEX.exec(fullText);
+  if (voltageMatch && !specs['Tensão / Voltagem']) {
+    specs['Tensão / Voltagem'] = `${voltageMatch[1]}V`;
   }
 
-  const batMatch = fullText.match(/(\d+(?:\.\d+)?\s*(?:mAh|Ah))\b/i);
-  if (batMatch && !specs['Capacidade da Bateria']) {
-    specs['Capacidade da Bateria'] = batMatch[0];
+  const brushlessMatch = BRUSHLESS_REGEX.exec(fullText);
+  if (brushlessMatch && !specs['Tipo de Motor']) {
+    specs['Tipo de Motor'] = 'Brushless (Sem Escovas de Carvão)';
+  }
+}
+
+/**
+ * Analisador Dinâmico e Agnóstico de Especificações
+ * Minera especificações estruturadas e heurísticas dos produtos
+ */
+export function analyzeProductSpecs(slot: ProductSlot): Record<string, string> {
+  const specs: Record<string, string> = {};
+  if (!slot) return specs;
+
+  if (slot.specs && typeof slot.specs === 'object') {
+    extractStructuredSpecs(slot.specs, specs);
   }
 
-  const kitMatch = fullText.match(/\b(kit(?:\s*com)?\s*\d+\s*(?:pe[cç]as|unidades|un)?|jogo(?:\s*com)?\s*\d+\s*pe[cç]as|par\b|\d+\s*(?:pe[cç]as|unidades|un\b))/i);
-  if (kitMatch && !specs['Conteúdo da Embalagem / Acessórios']) {
-    specs['Conteúdo da Embalagem / Acessórios'] = kitMatch[0];
+  const textSource = [slot.raw_specs, slot.rawText].filter(Boolean).join('\n');
+  if (textSource) {
+    extractKeyValueLines(textSource, specs);
   }
 
-  const warMatch = fullText.match(/(\d{1,2}\s*(?:meses|ano[s]?|dias)\s*(?:de\s*garantia)?)/i);
-  if (warMatch && !specs['Garantia']) {
-    specs['Garantia'] = warMatch[0];
-  }
+  const fullText = `${slot.title || ''} ${textSource}`.trim();
+  extractAutomotiveSpecs(fullText, specs);
+  extractStationeryAndToolsSpecs(fullText, specs);
 
   return specs;
 }
 
-/**
- * Inferência Dinâmica de Categoria
- */
-export function detectCategoryDynamically(activeSlots: ProductSlot[]): string {
-  const combinedText = activeSlots
-    .map(s => `${s.title} ${Object.keys(s.specs || {}).join(' ')} ${Object.values(s.specs || {}).join(' ')}`)
-    .join(' ')
-    .toLowerCase();
+function compareWarranty(
+  cleanB: string,
+  cleanT: string
+): { status: ComparisonStatus; statusLabel: string; diffNote: string; isAdvantage: boolean } | null {
+  const matchB = /\d+/.exec(cleanB);
+  const matchT = /\d+/.exec(cleanT);
+  const numB = Number.parseInt(matchB?.[0] || '0', 10);
+  const numT = Number.parseInt(matchT?.[0] || '0', 10);
+  const isYearB = cleanB.includes('ano') || cleanB.includes('anos') || cleanB.includes('12');
+  const isYearT = cleanT.includes('ano') || cleanT.includes('anos') || cleanT.includes('12');
+  const monthsB = isYearB && numB < 10 ? numB * 12 : numB;
+  const monthsT = isYearT && numT < 10 ? numT * 12 : numT;
 
-  if (/pastilha|disco de freio|amortecedor|autope[cç]a|automotivo|veiculo|motor|filtro de [oó]leo|vela de igni|correia|oem|suspensao|par dianteiro|par traseiro|gol g|corsa|civic|corolla|palio/i.test(combinedText)) {
-    return 'Veículos & Autopeças';
+  if (monthsT > monthsB) {
+    return {
+      status: 'superior',
+      statusLabel: `Superior (+${monthsT - monthsB} meses)`,
+      diffNote: `${monthsT} meses vs ${monthsB} meses do Slot Base`,
+      isAdvantage: true,
+    };
   }
-  if (/sketchbook|caderno|papel\b|folhas|a4|a5|a3|gramatura|gsm|aquarela|hardcover|encaderna|canson|tilibra|offset|desenho/i.test(combinedText)) {
-    return 'Papelaria & Artigos de Arte';
+  if (monthsT < monthsB) {
+    return {
+      status: 'inferior',
+      statusLabel: `Inferior (-${monthsB - monthsT} meses)`,
+      diffNote: `Menor garantia (${monthsT} meses vs ${monthsB} meses)`,
+      isAdvantage: false,
+    };
   }
-  if (/parafusadeira|furadeira|torque|mandril|rpm|impacto|brushless|esmerilhadeira|martelete|makita|dewalt|bosch ferramenta/i.test(combinedText)) {
-    return 'Ferramentas Elétricas & Manuais';
+  return null;
+}
+
+function comparePosition(
+  cleanB: string,
+  cleanT: string
+): { status: ComparisonStatus; statusLabel: string; diffNote: string; isAdvantage: boolean } | null {
+  const isFrontB = cleanB.includes('diant');
+  const isRearB = cleanB.includes('tras');
+  const isFrontT = cleanT.includes('diant');
+  const isRearT = cleanT.includes('tras');
+
+  if ((isFrontB && isRearT) || (isRearB && isFrontT)) {
+    return {
+      status: 'divergent',
+      statusLabel: '⚠️ Posição Incompatível',
+      diffNote: 'Alerta crítico: Um é dianteiro e o outro é traseiro!',
+      isAdvantage: false,
+    };
   }
-  if (/fone|bluetooth|tws|anc|fone de ouvido|headphone|earbuds|soundcore|caixa de som|audio/i.test(combinedText)) {
-    return 'Áudio & Fones de Ouvido';
+  return null;
+}
+
+function compareMaterialsAndEngines(
+  cleanB: string,
+  cleanT: string
+): { status: ComparisonStatus; statusLabel: string; diffNote: string; isAdvantage: boolean } | null {
+  if (cleanT.includes('ceramica') && !cleanB.includes('ceramica')) {
+    return {
+      status: 'superior',
+      statusLabel: 'Superior (Cerâmica)',
+      diffNote: 'Cerâmica: menor ruído, menos pó e maior durabilidade',
+      isAdvantage: true,
+    };
   }
-  if (/placa de video|ssd|memoria ram|processador|ryzen|intel core|hardware|notebook|teclado mecanico|monitor/i.test(combinedText)) {
-    return 'Informática & Hardware';
-  }
-  if (/serum|vitamina c|anti-idade|facial|pele|fps|protetor solar|hidratante|acido hialuronico|shampoo/i.test(combinedText)) {
-    return 'Cosméticos & Cuidados Pessoais';
-  }
-  if (/camiseta|camisa|algodao|pima|linho|tecido|gola|calca|bermuda|vestuario|jaqueta/i.test(combinedText)) {
-    return 'Vestuário & Moda Têxtil';
-  }
-  if (/air fryer|cafeteira|aspirador|ventilador|eletrodomestico|panela eletrica/i.test(combinedText)) {
-    return 'Eletrodomésticos & Casa';
+  if (!cleanT.includes('ceramica') && cleanB.includes('ceramica')) {
+    return {
+      status: 'inferior',
+      statusLabel: 'Inferior vs Cerâmica',
+      diffNote: 'Composto não cerâmico tem maior desgaste',
+      isAdvantage: false,
+    };
   }
 
-  const words = combinedText
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter(w => w.length > 4 && !/^(produto|shopee|aliexpress|frete|gratis|envio|pronta|entrega|original|novo)$/.test(w));
-
-  const counts: Record<string, number> = {};
-  words.forEach(w => { counts[w] = (counts[w] || 0) + 1; });
-  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  if (sorted.length > 0) {
-    const top = sorted[0][0];
-    return `Artigos Gerais (${top.charAt(0).toUpperCase() + top.slice(1)})`;
+  if (cleanT.includes('brushless') && !cleanB.includes('brushless')) {
+    return {
+      status: 'superior',
+      statusLabel: 'Superior (Brushless)',
+      diffNote: 'Motor sem escovas: +50% vida útil e menor aquecimento',
+      isAdvantage: true,
+    };
+  }
+  if (!cleanT.includes('brushless') && cleanB.includes('brushless')) {
+    return {
+      status: 'inferior',
+      statusLabel: 'Inferior (Com escovas)',
+      diffNote: 'Motor convencional com desgaste de carvão',
+      isAdvantage: false,
+    };
   }
 
-  return 'Artigos Gerais & E-commerce';
+  return null;
+}
+
+function compareNumericValues(
+  baseVal: string,
+  targetVal: string
+): { status: ComparisonStatus; statusLabel: string; diffNote: string; isAdvantage: boolean } | null {
+  const numB = Number.parseFloat(baseVal.replace(/[^\d.,]/g, '').replace(',', '.'));
+  const numT = Number.parseFloat(targetVal.replace(/[^\d.,]/g, '').replace(',', '.'));
+
+  if (!Number.isNaN(numB) && !Number.isNaN(numT) && numB > 0 && numT > 0) {
+    if (numT > numB) {
+      const pct = Math.round(((numT - numB) / numB) * 100);
+      return {
+        status: 'superior',
+        statusLabel: `Superior (+${pct}%)`,
+        diffNote: `Valor superior (${targetVal} vs ${baseVal})`,
+        isAdvantage: true,
+      };
+    }
+    if (numT < numB) {
+      const pct = Math.round(((numB - numT) / numB) * 100);
+      return {
+        status: 'inferior',
+        statusLabel: `Inferior (-${pct}%)`,
+        diffNote: `Valor inferior (${targetVal} vs ${baseVal})`,
+        isAdvantage: false,
+      };
+    }
+  }
+  return null;
 }
 
 /**
- * Comparador Semântico de Atributos
+ * Função de Confronto Semântico e Inter-relação Linha a Linha (Fallback Inteligente)
  */
-function compareAttributeValues(
-  baseVal: string | null,
-  targetVal: string | null,
-  attributeName: string
-): { status: ComparisonStatus; cleanValue: string; badgeText: string; diffNote: string } {
+export function evaluateSpecRelationship(
+  attributeName: string,
+  baseVal: string,
+  targetVal: string,
+  slotBaseId: number,
+  targetSlotId: number
+): {
+  status: ComparisonStatus;
+  statusLabel: string;
+  diffNote: string;
+  isAdvantage: boolean;
+} {
   if (!targetVal || targetVal === 'Não informado' || targetVal === '—') {
     return {
       status: 'missing',
-      cleanValue: 'Não informada',
-      badgeText: 'Não informado',
-      diffNote: 'Dado não informado pelo vendedor',
+      statusLabel: 'Não informado',
+      diffNote: 'Atributo omitido pelo vendedor',
+      isAdvantage: false,
+    };
+  }
+
+  if (targetSlotId === slotBaseId) {
+    return {
+      status: 'base',
+      statusLabel: '★ Base Referência',
+      diffNote: 'Parâmetro de confronto ativo',
+      isAdvantage: false,
     };
   }
 
   if (!baseVal || baseVal === 'Não informado' || baseVal === '—') {
     return {
-      status: 'divergent',
-      cleanValue: targetVal,
-      badgeText: 'Divergente',
-      diffNote: 'Disponível apenas neste anúncio',
+      status: 'superior',
+      statusLabel: 'Superior (+)',
+      diffNote: 'Informado no anúncio (omitido no Slot Base)',
+      isAdvantage: true,
     };
   }
 
@@ -422,293 +512,330 @@ function compareAttributeValues(
   if (cleanB === cleanT) {
     return {
       status: 'equal',
-      cleanValue: targetVal,
-      badgeText: 'Idêntico',
-      diffNote: 'Especificação técnica equivalente',
+      statusLabel: 'Idêntico',
+      diffNote: 'Especificação tecnicamente equivalente',
+      isAdvantage: false,
     };
   }
 
-  // Códigos OEM
-  if (attributeName.includes('OEM') || attributeName.includes('Código')) {
-    const oemB = cleanB.replace(/[^a-z0-9]/g, '');
-    const oemT = cleanT.replace(/[^a-z0-9]/g, '');
-    if (oemB && oemT && (oemB === oemT || oemB.includes(oemT) || oemT.includes(oemB))) {
-      return {
-        status: 'equal',
-        cleanValue: targetVal,
-        badgeText: 'Idêntico (OEM)',
-        diffNote: 'Código OEM equivalente',
-      };
-    }
+  if (attributeName.includes('Garantia')) {
+    const warrantyRes = compareWarranty(cleanB, cleanT);
+    if (warrantyRes) return warrantyRes;
   }
 
-  // Comparação de Posição / Lado de Peças Automotivas
   if (attributeName.includes('Posição') || attributeName.includes('Lado')) {
-    const isFrontB = cleanB.includes('diant');
-    const isFrontT = cleanT.includes('diant');
-    const isRearB = cleanB.includes('tras');
-    const isRearT = cleanT.includes('tras');
-
-    if ((isFrontB && isFrontT) || (isRearB && isRearT)) {
-      return {
-        status: 'equal',
-        cleanValue: targetVal,
-        badgeText: 'Idêntico',
-        diffNote: 'Mesma posição de montagem',
-      };
-    }
-
-    if ((isFrontB && isRearT) || (isRearB && isFrontT)) {
-      return {
-        status: 'divergent',
-        cleanValue: targetVal,
-        badgeText: 'Alerta: Posição Incompatível',
-        diffNote: 'Atenção: Um é Dianteiro e outro é Traseiro!',
-      };
-    }
+    const posRes = comparePosition(cleanB, cleanT);
+    if (posRes) return posRes;
   }
 
-  // Comparação de Faixas de Anos
-  if (attributeName.includes('Ano')) {
-    const yearsB = (baseVal.match(/\b(19\d\d|20\d\d)\b/g) || []).map(Number);
-    const yearsT = (targetVal.match(/\b(19\d\d|20\d\d)\b/g) || []).map(Number);
-    if (yearsB.length > 0 && yearsT.length > 0) {
-      const minB = Math.min(...yearsB);
-      const maxB = Math.max(...yearsB);
-      const minT = Math.min(...yearsT);
-      const maxT = Math.max(...yearsT);
+  const matRes = compareMaterialsAndEngines(cleanB, cleanT);
+  if (matRes) return matRes;
 
-      if (minB === minT && maxB === maxT) {
-        return {
-          status: 'equal',
-          cleanValue: targetVal,
-          badgeText: 'Idêntico',
-          diffNote: 'Mesma faixa de anos de compatibilidade',
-        };
-      }
-      return {
-        status: 'divergent',
-        cleanValue: targetVal,
-        badgeText: 'Divergente',
-        diffNote: `Faixa de anos diferente (${targetVal} vs ${baseVal})`,
-      };
-    }
-  }
-
-  // Unidades e valores numéricos únicos (ex: 12V vs 12 Volts, 180 g/m² vs 180gsm)
-  const allNumsB = baseVal.match(/\b(\d+(?:[.,]\d+)?)\b/g) || [];
-  const allNumsT = targetVal.match(/\b(\d+(?:[.,]\d+)?)\b/g) || [];
-
-  if (allNumsB.length === 1 && allNumsT.length === 1) {
-    const valB = parseFloat(allNumsB[0].replace(',', '.'));
-    const valT = parseFloat(allNumsT[0].replace(',', '.'));
-
-    if (valB === valT && cleanB.replace(/[\d.,\s]/g, '') === cleanT.replace(/[\d.,\s]/g, '')) {
-      return {
-        status: 'equal',
-        cleanValue: targetVal,
-        badgeText: 'Idêntico',
-        diffNote: 'Valor e unidade equivalentes',
-      };
-    }
-
-    if (valT > valB) {
-      return {
-        status: 'divergent',
-        cleanValue: targetVal,
-        badgeText: 'Superior (+)',
-        diffNote: `Superior ao Base (${targetVal} vs ${baseVal})`,
-      };
-    } else if (valT < valB) {
-      return {
-        status: 'divergent',
-        cleanValue: targetVal,
-        badgeText: 'Inferior (-)',
-        diffNote: `Inferior ao Base (${targetVal} vs ${baseVal})`,
-      };
-    }
-  }
+  const numRes = compareNumericValues(baseVal, targetVal);
+  if (numRes) return numRes;
 
   return {
     status: 'divergent',
-    cleanValue: targetVal,
-    badgeText: 'Divergente',
-    diffNote: `Divergência técnica vs Base (${baseVal})`,
+    statusLabel: 'Divergente',
+    diffNote: `Especificação divergente (${targetVal} vs ${baseVal})`,
+    isAdvantage: false,
+  };
+}
+
+function interpretIdentical(attrName: string, firstVal: string): SpecAIInterpretation {
+  return {
+    summary: `Todos os produtos comparados compartilham exatamente a mesma especificação de ${attrName.toLowerCase()} (${firstVal}).`,
+    winner_slot: null,
+    practical_impact: 'Nenhuma diferença prática de desempenho ou compatibilidade neste atributo.',
+    severity: 'low',
+  };
+}
+
+function interpretAutomotiveOrPos(cleanVals: { id: number; clean: string }[]): SpecAIInterpretation {
+  const hasFront = cleanVals.some(v => v.clean.includes('diant'));
+  const hasRear = cleanVals.some(v => v.clean.includes('tras'));
+  if (hasFront && hasRear) {
+    return {
+      summary: 'Atenção crítica: há incompatibilidade na posição de montagem entre os anúncios selecionados.',
+      winner_slot: null,
+      practical_impact: 'Verifique se seu veículo necessita de reposição dianteira ou traseira antes de fechar a compra para evitar devolução.',
+      severity: 'high',
+    };
+  }
+  return {
+    summary: 'Os anúncios possuem descrições de aplicação específicas para os modelos e linhas automotivas atendidas.',
+    winner_slot: null,
+    practical_impact: 'Confirme o código do chassi ou modelo antes da instalação.',
+    severity: 'high',
+  };
+}
+
+function interpretWarranty(vals: { id: number; val: string }[]): SpecAIInterpretation {
+  let maxG = 0;
+  let winner_slot: number | null = null;
+  vals.forEach(v => {
+    const match = /\d+/.exec(v.val);
+    const g = Number.parseInt(match?.[0] || '0', 10);
+    if (g > maxG) {
+      maxG = g;
+      winner_slot = v.id;
+    }
+  });
+
+  const summary = winner_slot
+    ? `O Slot ${winner_slot} oferece a maior cobertura de garantia de fábrica, garantindo maior proteção pós-venda.`
+    : 'Divergência nos prazos de garantia informados pelos lojistas.';
+
+  return {
+    summary,
+    winner_slot,
+    practical_impact: 'Garantias mais longas protegem o investimento contra defeitos ocultos de fabricação.',
+    severity: 'high',
+  };
+}
+
+function interpretMaterials(vals: { id: number; val: string }[]): SpecAIInterpretation {
+  const ceramic = vals.find(v => cleanStr(v.val).includes('ceramica'));
+  if (ceramic) {
+    return {
+      summary: `O Slot ${ceramic.id} utiliza composto de Cerâmica, superior em durabilidade e ausência de fuligem em relação aos compostos convencionais.`,
+      winner_slot: ceramic.id,
+      practical_impact: 'Frenagens mais limpas e silenciosas com vida útil prolongada.',
+      severity: 'high',
+    };
+  }
+  return {
+    summary: 'Variação de materiais e compostos utilizados na fabricação dos produtos.',
+    winner_slot: null,
+    practical_impact: 'Impacta diretamente na durabilidade e resistência ao desgaste contínuo.',
+    severity: 'high',
+  };
+}
+
+function interpretNumericAttr(
+  attrName: string,
+  slotValues: Record<string, string>,
+  vals: { id: number; val: string }[]
+): SpecAIInterpretation {
+  let maxNum = 0;
+  let winner_slot: number | null = null;
+  vals.forEach(v => {
+    const n = Number.parseFloat(v.val.replace(/[^\d.,]/g, '').replace(',', '.'));
+    if (n > maxNum) {
+      maxNum = n;
+      winner_slot = v.id;
+    }
+  });
+
+  if (winner_slot) {
+    const winnerVal = slotValues[`slot_${winner_slot}`];
+    return {
+      summary: `O Slot ${winner_slot} se destaca com a maior entrega técnica em ${attrName.toLowerCase()} (${winnerVal}).`,
+      winner_slot,
+      practical_impact: 'Oferece maior força e autonomia para trabalhos pesados sem sobrecarregar o motor.',
+      severity: 'high',
+    };
+  }
+  return {
+    summary: 'Diferenças na capacidade e potência entregue entre os modelos.',
+    winner_slot: null,
+    practical_impact: 'Define o rendimento e tempo de trabalho contínuo.',
+    severity: 'high',
   };
 }
 
 /**
- * Construtor do Veredito Dinâmico e Contextual
+ * Gera interpretação de IA para uma linha de especificação
  */
-function generateDynamicVerdict(
+function generateSpecAIInterpretation(
+  attrName: string,
+  _category: string,
+  slotValues: Record<string, string>,
   activeSlots: ProductSlot[],
-  baseSlotId: number,
-  specsMatrix: SpecsMatrixRow[],
-  category: string
-): string {
-  const baseSlot = activeSlots.find(s => s.id === baseSlotId) || activeSlots[0];
+  _baseSlotId: number
+): SpecAIInterpretation {
+  const vals = activeSlots.map(s => ({
+    id: s.id,
+    val: slotValues[`slot_${s.id}`] || 'Não informado',
+  }));
 
-  let minTotal = Infinity;
-  let minSlot = activeSlots[0];
-  activeSlots.forEach(s => {
-    const tot = (s.price || 0) + (s.shipping || 0);
-    if (tot < minTotal) {
-      minTotal = tot;
-      minSlot = s;
-    }
-  });
+  const cleanVals = vals.map(v => ({ id: v.id, clean: cleanStr(v.val) }));
+  const uniqueVals = Array.from(new Set(cleanVals.map(v => v.clean).filter(Boolean)));
 
-  const baseTotal = (baseSlot.price || 0) + (baseSlot.shipping || 0);
-  const priceDiff = Math.abs(baseTotal - minTotal);
-  const priceDiffPct = baseTotal > 0 ? Math.round((priceDiff / baseTotal) * 100) : 0;
-
-  const compromises: string[] = [];
-  const missingData: string[] = [];
-
-  specsMatrix.forEach(row => {
-    const rawVal = row[`slot_${minSlot.id}`] || '';
-    if (/não informad/i.test(rawVal)) {
-      missingData.push(row.attribute);
-    } else if (/inferior/i.test(rawVal) || /incompat[ií]vel/i.test(rawVal)) {
-      compromises.push(`${row.attribute} (${rawVal})`);
-    }
-  });
-
-  const formatBRL = (val: number) =>
-    val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-
-  let verdict = '';
-  if (minSlot.id === baseSlot.id) {
-    verdict = `O Slot ${baseSlot.id} reúne o menor desembolso total (${formatBRL(minTotal)}) e serve como a melhor referência técnica para a categoria ${category}, sem concessões na qualidade ou compatibilidade.`;
-  } else if (compromises.length > 0) {
-    verdict = `O Slot ${minSlot.id} é a opção mais econômica (${formatBRL(minTotal)}, economia de ${formatBRL(priceDiff)} / -${priceDiffPct}%), mas apresenta reduções técnicas em relação ao Slot ${baseSlot.id}: ${compromises.slice(0, 3).join(', ')}. O Slot ${baseSlot.id} continua sendo a recomendação técnica mais sólida.`;
-  } else if (missingData.length >= 2) {
-    verdict = `O Slot ${minSlot.id} possui o menor preço (${formatBRL(minTotal)}), contudo o anúncio não informa atributos cruciais como: ${missingData.slice(0, 3).join(', ')}. Recomenda-se cautela ou confirmação prévia com o vendedor.`;
-  } else {
-    verdict = `O Slot ${minSlot.id} oferece o melhor custo-benefício (${formatBRL(minTotal)}), gerando uma economia de ${formatBRL(priceDiff)} (-${priceDiffPct}%) em comparação com o Slot ${baseSlot.id}, mantendo especificações técnicas equivalentes.`;
+  if (uniqueVals.length <= 1) {
+    return interpretIdentical(attrName, vals[0]?.val || 'Não informado');
+  }
+  if (attrName.includes('Posição') || attrName.includes('Compatibilidade')) {
+    return interpretAutomotiveOrPos(cleanVals);
+  }
+  if (attrName.includes('Garantia')) {
+    return interpretWarranty(vals);
+  }
+  if (attrName.includes('Material') || attrName.includes('Composição')) {
+    return interpretMaterials(vals);
+  }
+  if (attrName.includes('Torque') || attrName.includes('Bateria') || attrName.includes('Potência')) {
+    return interpretNumericAttr(attrName, slotValues, vals);
   }
 
-  if (category.includes('Veículos') || category.includes('Autopeças')) {
-    verdict += ` Em autopeças, certifique-se da compatibilidade do código OEM, ano e posição de montagem antes de comprar.`;
-  }
-
-  return verdict;
-}
-
-// Auxiliar: Busca valor na ficha por chave normalizada sem colisão de substring
-function findMatchingValueExact(specs: Record<string, string>, targetCleanKey: string): string | null {
-  if (!specs) return null;
-  for (const [k, v] of Object.entries(specs)) {
-    if (cleanStr(k) === targetCleanKey) return v;
-  }
-  const mapped = SYNONYM_MAP[targetCleanKey];
-  if (mapped) {
-    const cleanMapped = cleanStr(mapped);
-    for (const [k, v] of Object.entries(specs)) {
-      if (cleanStr(k) === cleanMapped) return v;
-    }
-  }
-  return null;
+  return {
+    summary: `Comparação detalhada de ${attrName.toLowerCase()} entre os ${activeSlots.length} produtos.`,
+    winner_slot: null,
+    practical_impact: 'Variações estéticas ou de formato que dependem da preferência de uso.',
+    severity: 'low',
+  };
 }
 
 /**
- * Fallback Dinâmico Heurístico Autônomo e Mutável
+ * Construtor Completo de Auditoria Dinâmica (Fallback Inteligente Local)
  */
 export function generateDynamicFallbackAudit(
   slots: (ProductSlot | null)[],
   baseSlotId = 1
 ): DynamicComparisonResult {
   const activeSlots = slots.filter((s): s is ProductSlot => s !== null);
-  const baseSlot = slots[baseSlotId - 1] || activeSlots[0] || slots[0];
-  const effectiveBaseId = baseSlot ? baseSlot.id : 1;
+  if (activeSlots.length === 0) {
+    return {
+      detected_category: 'Nenhum Produto Selecionado',
+      base_slot_id: baseSlotId,
+      comparison_matrix: [],
+      specs_matrix: [],
+      technical_verdict: 'Adicione pelo menos 2 produtos aos slots para iniciar o confronto técnico de especificações.',
+      executive_summary: '',
+      scores_by_slot: [],
+    };
+  }
 
-  // 1. Categoria Dinâmica
-  const detectedCategory = detectCategoryDynamically(activeSlots);
+  const effectiveBaseId = activeSlots.some(s => s.id === baseSlotId)
+    ? baseSlotId
+    : activeSlots[0].id;
 
-  // 2. Extrai e enriquece especificações de cada produto
-  const slotSpecsEnriched: Record<number, Record<string, string>> = {};
-  const allAttributesMap = new Map<string, string>(); // cleanKey -> DisplayLabel
+  // 1. Minera especificações de todos os slots
+  const extractedBySlot: Record<number, Record<string, string>> = {};
+  const allCanonicalKeys = new Set<string>();
 
-  activeSlots.forEach(slot => {
-    const enriched = analyzeProductSpecs(slot);
-    slotSpecsEnriched[slot.id] = enriched;
-
-    Object.keys(enriched).forEach(rawKey => {
-      const cleanK = cleanStr(rawKey);
-      if (cleanK && !allAttributesMap.has(cleanK)) {
-        allAttributesMap.set(cleanK, rawKey);
-      }
-    });
+  activeSlots.forEach(s => {
+    const sp = analyzeProductSpecs(s);
+    extractedBySlot[s.id] = sp;
+    Object.keys(sp).forEach(k => allCanonicalKeys.add(k));
   });
 
-  // 3. Constrói a Matriz de Comparação e Specs Matrix
+  // Determina Categoria Global
+  let detectedCategory = 'Produto Geral';
+  const joinedTitles = activeSlots.map(s => s.title).join(' ').toLowerCase();
+  if (/pastilha|freio|amortecedor|oem|gol|voyage|fox|civic|corolla|vela|filtro/i.test(joinedTitles)) {
+    detectedCategory = '🚗 Veículos & Autopeças';
+  } else if (/parafusadeira|furadeira|impacto|mandril|torque|brushless|dewalt|makita|bosch/i.test(joinedTitles)) {
+    detectedCategory = '⚡ Ferramentas Elétricas & Máquinas';
+  } else if (/sketchbook|canson|a4|a5|gramatura|folhas|papel|hahnemuhle/i.test(joinedTitles)) {
+    detectedCategory = '📄 Papelaria & Artigos de Arte';
+  } else if (/fone|bluetooth|anc|headphone|earbud|audio|tws/i.test(joinedTitles)) {
+    detectedCategory = '🎧 Áudio & Eletrônicos';
+  }
+
+  // 2. Constrói Matriz de Comparação de Especificações
   const comparisonMatrix: DynamicComparisonRow[] = [];
   const specs_matrix: SpecsMatrixRow[] = [];
 
-  allAttributesMap.forEach((displayLabel, cleanKey) => {
-    const s1Raw = slotSpecsEnriched[1] ? findMatchingValueExact(slotSpecsEnriched[1], cleanKey) : null;
-    const slot_1_value = s1Raw || 'Não informado';
+  const topAdvantages: { slot_id: number; title: string; detail: string }[] = [];
+  const criticalWarnings: { title: string; detail: string; affected_slots: number[] }[] = [];
+  const convergences: string[] = [];
 
-    const baseRaw = slotSpecsEnriched[effectiveBaseId]
-      ? findMatchingValueExact(slotSpecsEnriched[effectiveBaseId], cleanKey)
-      : null;
-    const baseValueNormalized = baseRaw || 'Não informado';
+  const advantageCountBySlot: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  const drawCountBySlot: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  const disadvantageCountBySlot: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  const missingCountBySlot: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+
+  Array.from(allCanonicalKeys).forEach((attrName, idx) => {
+    const category = categorizeAttribute(attrName);
+    const baseVal = extractedBySlot[effectiveBaseId]?.[attrName] || 'Não informado';
 
     const slot_values: Record<string, string> = {};
-    const comparisons: Record<string, { value: string; status: ComparisonStatus; diffNote?: string }> = {};
+    const comparisons: Record<string, SlotComparisonItem> = {};
 
-    const matrixRow: SpecsMatrixRow = {
-      attribute: displayLabel,
-      slot_1: slot_1_value,
-    };
+    for (let i = 1; i <= 5; i++) {
+      const hasSlot = activeSlots.some(s => s.id === i);
+      if (hasSlot) {
+        const val = extractedBySlot[i]?.[attrName] || 'Não informado';
+        slot_values[`slot_${i}`] = val;
 
-    for (let i = 0; i < 5; i++) {
-      const slotNum = i + 1;
-      const slotObj = slots[i];
-      const slotKeyName = `slot_${slotNum}`;
-
-      if (!slotObj) {
-        slot_values[slotKeyName] = '—';
-        continue;
-      }
-
-      const rawVal = slotSpecsEnriched[slotNum]
-        ? findMatchingValueExact(slotSpecsEnriched[slotNum], cleanKey)
-        : null;
-      const valDisplay = rawVal || 'Não informado';
-      slot_values[slotKeyName] = valDisplay;
-
-      if (slotNum === effectiveBaseId) {
-        matrixRow[slotKeyName] = valDisplay;
-        comparisons[slotKeyName] = {
-          value: valDisplay,
-          status: 'base',
-          diffNote: 'Base de Referência',
+        const evalResult = evaluateSpecRelationship(attrName, baseVal, val, effectiveBaseId, i);
+        comparisons[`slot_${i}`] = {
+          value: val,
+          status: evalResult.status,
+          statusLabel: evalResult.statusLabel,
+          diffNote: evalResult.diffNote,
+          isAdvantage: evalResult.isAdvantage,
         };
-      } else {
-        const comp = compareAttributeValues(baseValueNormalized, rawVal, displayLabel);
-        matrixRow[slotKeyName] = comp.cleanValue ? `${comp.cleanValue} (${comp.badgeText})` : comp.badgeText;
-        comparisons[slotKeyName] = {
-          value: comp.cleanValue || valDisplay,
-          status: comp.status,
-          diffNote: comp.diffNote,
-        };
+
+        if (evalResult.status === 'superior' || evalResult.isAdvantage) advantageCountBySlot[i]++;
+        else if (evalResult.status === 'equal' || evalResult.status === 'base') drawCountBySlot[i]++;
+        else if (evalResult.status === 'inferior' || evalResult.status === 'divergent') disadvantageCountBySlot[i]++;
+        else if (evalResult.status === 'missing') missingCountBySlot[i]++;
       }
     }
 
-    comparisonMatrix.push({
-      attribute_name: displayLabel,
-      slot_1_value,
+    const aiInterpretation = generateSpecAIInterpretation(
+      attrName,
+      category,
+      slot_values,
+      activeSlots,
+      effectiveBaseId
+    );
+
+    if (aiInterpretation.winner_slot && advantageCountBySlot[aiInterpretation.winner_slot] !== undefined) {
+      const winnerVal = slot_values[`slot_${aiInterpretation.winner_slot}`];
+      topAdvantages.push({
+        slot_id: aiInterpretation.winner_slot,
+        title: `${attrName}: ${winnerVal}`,
+        detail: aiInterpretation.summary,
+      });
+    }
+
+    if (aiInterpretation.severity === 'high' && aiInterpretation.summary.includes('incompatibilidade')) {
+      criticalWarnings.push({
+        title: `Divergência Crítica em ${attrName}`,
+        detail: aiInterpretation.practical_impact || 'Verifique a aplicação do produto antes da compra.',
+        affected_slots: activeSlots.map(s => s.id),
+      });
+    }
+
+    if (aiInterpretation.summary.includes('compartilham exatamente')) {
+      convergences.push(`${attrName}: ${baseVal}`);
+    }
+
+    const row: DynamicComparisonRow = {
+      id: `spec-${idx}`,
+      category,
+      attribute_name: attrName,
+      slot_1_value: slot_values.slot_1 || 'Não informado',
       slot_values,
       comparisons,
-    });
+      ai_interpretation: aiInterpretation,
+    };
 
+    comparisonMatrix.push(row);
+
+    // Compatibilidade com specs_matrix clássico
+    const matrixRow: SpecsMatrixRow = {
+      category,
+      attribute: attrName,
+      slot_1: slot_values.slot_1 || 'Não informado',
+      slot_2: slot_values.slot_2,
+      slot_3: slot_values.slot_3,
+      slot_4: slot_values.slot_4,
+      slot_5: slot_values.slot_5,
+      ai_insight: aiInterpretation.summary,
+      winner: aiInterpretation.winner_slot ? `Slot ${aiInterpretation.winner_slot}` : undefined,
+    };
     specs_matrix.push(matrixRow);
   });
 
-  // 4. Comparações Pareadas Cruzadas (Slot A vs Slot B)
-  const pairwise_matrix: Record<string, PairwiseComparison> = {};
+  // Ordena matriz por categoria temática
+  comparisonMatrix.sort((a, b) => (a.category || '').localeCompare(b.category || ''));
 
+  // 3. Monta Pairwise (1 vs 1)
+  const pairwise_matrix: Record<string, PairwiseComparison> = {};
   for (let i = 0; i < activeSlots.length; i++) {
     for (let j = i + 1; j < activeSlots.length; j++) {
       const slotA = activeSlots[i];
@@ -722,11 +849,11 @@ export function generateDynamicFallbackAudit(
       const advantagesB: string[] = [];
 
       comparisonMatrix.forEach(row => {
-        const valA = row.slot_values[`slot_${slotA.id}`];
-        const valB = row.slot_values[`slot_${slotB.id}`];
+        const valA = row.slot_values[`slot_${slotA.id}`] || 'Não informado';
+        const valB = row.slot_values[`slot_${slotB.id}`] || 'Não informado';
 
-        const hasA = valA && valA !== 'Não informado' && valA !== '—';
-        const hasB = valB && valB !== 'Não informado' && valB !== '—';
+        const hasA = valA !== 'Não informado' && valA !== '—';
+        const hasB = valB !== 'Não informado' && valB !== '—';
 
         if (!hasA || !hasB) {
           missingCount++;
@@ -763,8 +890,21 @@ export function generateDynamicFallbackAudit(
     }
   }
 
-  // 5. Veredito Técnico Dinâmico
-  const technicalVerdict = generateDynamicVerdict(activeSlots, effectiveBaseId, specs_matrix, detectedCategory);
+  // 4. Veredito Técnico e Scores
+  const scores_by_slot: SlotScore[] = activeSlots.map(s => ({
+    slot_id: s.id,
+    advantages_count: advantageCountBySlot[s.id] || 0,
+    draws_count: drawCountBySlot[s.id] || 0,
+    disadvantages_count: disadvantageCountBySlot[s.id] || 0,
+    missing_count: missingCountBySlot[s.id] || 0,
+  }));
+
+  const technicalVerdict = generateTechnicalVerdict(
+    activeSlots,
+    effectiveBaseId,
+    comparisonMatrix,
+    detectedCategory
+  );
 
   return {
     detected_category: detectedCategory,
@@ -772,12 +912,141 @@ export function generateDynamicFallbackAudit(
     comparison_matrix: comparisonMatrix,
     specs_matrix,
     technical_verdict: technicalVerdict,
-    pairwise_matrix,
     executive_summary: technicalVerdict,
+    key_findings: {
+      top_advantages: topAdvantages.slice(0, 4),
+      critical_warnings: criticalWarnings.slice(0, 3),
+      convergences: convergences.slice(0, 4),
+    },
+    scores_by_slot,
+    pairwise_matrix,
   };
 }
 
-// Chamada Principal do Serviço (Tenta Backend IA ou faz Fallback Dinâmico)
+function generateTechnicalVerdict(
+  activeSlots: ProductSlot[],
+  baseSlotId: number,
+  matrix: DynamicComparisonRow[],
+  category: string
+): string {
+  const baseSlot = activeSlots.find(s => s.id === baseSlotId) || activeSlots[0];
+  let minTotal = Infinity;
+  let minSlot = activeSlots[0];
+
+  activeSlots.forEach(s => {
+    const tot = (s.price || 0) + (s.shipping || 0);
+    if (tot < minTotal) {
+      minTotal = tot;
+      minSlot = s;
+    }
+  });
+
+  const baseTotal = (baseSlot.price || 0) + (baseSlot.shipping || 0);
+  const diff = Math.abs(baseTotal - minTotal);
+  const pct = baseTotal > 0 ? Math.round((diff / baseTotal) * 100) : 0;
+  const formatBRL = (val: number) =>
+    val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+  const compromises: string[] = [];
+  matrix.forEach(row => {
+    const comp = row.comparisons[`slot_${minSlot.id}`];
+    if (comp?.status === 'inferior' || comp?.status === 'divergent') {
+      compromises.push(`${row.attribute_name} (${comp.diffNote || comp.value})`);
+    }
+  });
+
+  if (minSlot.id === baseSlot.id) {
+    return `O Slot ${baseSlot.id} é a melhor escolha técnica e financeira (${formatBRL(minTotal)}), entregando especificações sólidas e completas para ${category} sem abrir mão de qualidade ou compatibilidade.`;
+  }
+
+  if (compromises.length > 0) {
+    return `O Slot ${minSlot.id} é o mais barato (${formatBRL(minTotal)}, economia de ${formatBRL(diff)} / -${pct}%), mas exige concessões técnicas em relação ao Slot ${baseSlot.id}: ${compromises.slice(0, 2).join('; ')}. Se durabilidade e compatibilidade forem prioridade, o Slot ${baseSlot.id} oferece melhor custo-benefício real.`;
+  }
+
+  return `O Slot ${minSlot.id} entrega excelente custo-benefício (${formatBRL(minTotal)}), proporcionando uma economia real de ${formatBRL(diff)} (-${pct}%) com especificações equivalentes ao Slot Base ${baseSlot.id}.`;
+}
+
+const STATUS_LABEL_MAP: Record<ComparisonStatus, string> = {
+  base: '★ Base',
+  equal: 'Idêntico',
+  superior: 'Superior (+)',
+  inferior: 'Inferior (-)',
+  divergent: 'Divergente',
+  missing: 'Não informado',
+};
+
+function getStatusLabel(status: ComparisonStatus): string {
+  return STATUS_LABEL_MAP[status] || 'Divergente';
+}
+
+function convertFlatSpecsMatrixToComparisonMatrix(
+  specsMatrix: any[],
+  baseSlotId: number
+): DynamicComparisonRow[] {
+  return specsMatrix.map((row: any, idx: number) => {
+    const attrName = row.attribute || row.attribute_name || 'Especificação';
+    const cat = row.category || categorizeAttribute(attrName);
+    const s1Val = row.slot_1 || row.slot_1_value || 'Não informado';
+    const baseVal = row[`slot_${baseSlotId}`] || s1Val;
+
+    const slot_values: Record<string, string> = {
+      slot_1: s1Val,
+      slot_2: row.slot_2 || 'Não informado',
+      slot_3: row.slot_3 || 'Não informado',
+      slot_4: row.slot_4 || 'Não informado',
+      slot_5: row.slot_5 || 'Não informado',
+    };
+
+    const comparisons: Record<string, SlotComparisonItem> = {};
+    for (let i = 1; i <= 5; i++) {
+      const sKey = `slot_${i}`;
+      const rawStr = row[sKey] || 'Não informado';
+      const cleanVal = rawStr.replace(/\s*\([^)]*\)/g, '').trim();
+
+      let status: ComparisonStatus = 'divergent';
+      if (i === baseSlotId) {
+        status = 'base';
+      } else if (/não informad|nao informad/i.test(rawStr)) {
+        status = 'missing';
+      } else if (/idêntico|identico|equal/i.test(rawStr) || cleanStr(cleanVal) === cleanStr(baseVal)) {
+        status = 'equal';
+      } else if (/superior|\(\+\)/i.test(rawStr)) {
+        status = 'superior';
+      } else if (/inferior|\(-\)/i.test(rawStr)) {
+        status = 'inferior';
+      }
+
+      comparisons[sKey] = {
+        value: cleanVal || rawStr,
+        status,
+        statusLabel: getStatusLabel(status),
+        diffNote: rawStr,
+      };
+    }
+
+    const winnerMatch = row.winner ? Number.parseInt(row.winner.replace(/\D/g, ''), 10) : null;
+    const aiInterpretation: SpecAIInterpretation = {
+      summary: row.ai_insight || `Análise de ${attrName} entre os slots avaliados.`,
+      winner_slot: Number.isNaN(winnerMatch) ? null : winnerMatch,
+      practical_impact: 'Impacto direto no uso e rendimento do produto.',
+      severity: 'medium',
+    };
+
+    return {
+      id: `spec-${idx}`,
+      category: cat,
+      attribute_name: attrName,
+      slot_1_value: s1Val,
+      slot_values,
+      comparisons,
+      ai_interpretation: aiInterpretation,
+    };
+  });
+}
+
+/**
+ * Chamada Principal do Serviço (Tenta Backend Gemini IA ou realiza Fallback Dinâmico com IA Heurística)
+ */
 export async function performAIAudit(
   slots: (ProductSlot | null)[],
   baseSlotId = 1
@@ -796,45 +1065,24 @@ export async function performAIAudit(
         const category = d.category || d.detected_category || 'Produto Geral';
         const technicalVerdict = d.technical_verdict || d.executive_summary || '';
 
+        // Se o Gemini retornou a matriz estruturada completa
+        if (d.comparison_matrix && Array.isArray(d.comparison_matrix)) {
+          return {
+            detected_category: category,
+            base_slot_id: baseSlotId,
+            comparison_matrix: d.comparison_matrix,
+            specs_matrix: d.specs_matrix || [],
+            technical_verdict: technicalVerdict,
+            executive_summary: technicalVerdict,
+            key_findings: d.key_findings || { top_advantages: [], critical_warnings: [], convergences: [] },
+            scores_by_slot: d.scores_by_slot || [],
+            pairwise_matrix: d.pairwise_matrix,
+          };
+        }
+
+        // Se retornou formato plano (specs_matrix simples), enriquece para DynamicComparisonRow[]
         if (d.specs_matrix && Array.isArray(d.specs_matrix)) {
-          const comparison_matrix: DynamicComparisonRow[] = d.specs_matrix.map((row: any) => {
-            const attrName = row.attribute || row.attribute_name || 'Especificação';
-            const s1Val = row.slot_1 || row.slot_1_value || 'Não informado';
-            const baseVal = row[`slot_${baseSlotId}`] || s1Val;
-
-            const slot_values: Record<string, string> = {
-              slot_1: s1Val,
-              slot_2: row.slot_2 || 'Não informado',
-              slot_3: row.slot_3 || 'Não informado',
-              slot_4: row.slot_4 || 'Não informado',
-              slot_5: row.slot_5 || 'Não informado',
-            };
-
-            const comparisons: Record<string, { value: string; status: ComparisonStatus }> = {};
-
-            for (let i = 1; i <= 5; i++) {
-              const sKey = `slot_${i}`;
-              const rawStr = row[sKey] || 'Não informado';
-              const cleanVal = rawStr.replace(/\s*\(.*?\)/g, '').trim();
-
-              let status: ComparisonStatus = 'divergent';
-              if (i === baseSlotId) status = 'base';
-              else if (/não informad|nao informad/i.test(rawStr)) status = 'missing';
-              else if (/idêntico|identico|equal/i.test(rawStr) || cleanStr(cleanVal) === cleanStr(baseVal)) status = 'equal';
-
-              comparisons[sKey] = {
-                value: cleanVal || rawStr,
-                status,
-              };
-            }
-
-            return {
-              attribute_name: attrName,
-              slot_1_value: s1Val,
-              slot_values,
-              comparisons,
-            };
-          });
+          const comparison_matrix = convertFlatSpecsMatrixToComparisonMatrix(d.specs_matrix, baseSlotId);
 
           return {
             detected_category: category,
@@ -843,20 +1091,14 @@ export async function performAIAudit(
             specs_matrix: d.specs_matrix,
             technical_verdict: technicalVerdict,
             executive_summary: technicalVerdict,
-          };
-        }
-
-        if (d.comparison_matrix) {
-          return {
-            ...d,
-            detected_category: category,
-            executive_summary: technicalVerdict || d.executive_summary,
+            key_findings: d.key_findings,
+            scores_by_slot: d.scores_by_slot,
           };
         }
       }
     }
   } catch (err) {
-    console.warn('Backend /api/ai-audit indisponível, usando fallback dinâmico local:', err);
+    console.warn('Backend /api/ai-audit indisponível, utilizando motor heurístico de IA local:', err);
   }
 
   return generateDynamicFallbackAudit(slots, baseSlotId);

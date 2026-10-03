@@ -52,60 +52,107 @@ ${specsText || slot.title || 'Nenhuma especificação informada'}
 `;
     });
 
-    const systemInstruction = `Você é um Auditor Técnico Especialista em Produtos, Autopeças e E-commerce.
-Sua missão é analisar rigorosamente os dados de produtos capturados em até 5 slots (Slot 1 a Slot 5) e gerar um relatório comparativo técnico e financeiro estruturado.
+    const systemInstruction = `Você é um Auditor Técnico Especialista em Produtos, Autopeças e E-commerce de Alta Precisão.
+Sua missão é interpretar profundamente o conteúdo técnico de até 5 produtos capturados em slots (Slot 1 a Slot 5) e gerar um relatório comparativo estruturado, inter-relacionando as especificações de cada produto.
 
-DIRETRIZES DE AUDITORIA (100% DINÂMICAS E MUTÁVEIS):
-1. Extração Dinâmica e Agnóstica de Categoria:
-   - Os produtos podem pertencer a QUALQUER categoria: Veículos & Autopeças (pastilhas, amortecedores, velas, filtros, etc.), Papelaria & Livros (cadernos, papéis, sketchbooks), Ferramentas Elétricas/Manuais, Hardware & Informática, Áudio, Vestuário, etc.
-   - NUNCA assuma esquemas pré-fixados de uma única categoria. Adapte as especificações e o vocabulário à categoria real dos produtos analisados.
+DIRETRIZES DE INTERPRETAÇÃO E INTER-RELAÇÃO (DINÂMICAS E MULTI-CATEGORIA):
+1. Normalização Semântica e Cruzamento Inteligente:
+   - Produtos podem usar termos diferentes para o mesmo conceito (ex: "Mandril 3/8" vs "10mm sem chave", "Motor Brushless" vs "Sem escovas de carvão", "2000mAh" vs "2.0Ah", "100% algodão" vs "Puro algodão", "Dianteiro" vs "Frontal").
+   - Inter-relacione e unifique esses conceitos sob um mesmo "attribute_name" padronizado.
+   - Agrupe as especificações em categorias temáticas naturais (ex: "Desempenho & Potência", "Alimentação & Bateria", "Construção & Dimensões", "Compatibilidade & Aplicação", "Acessórios & Embalagem", "Garantia & Procedência").
 
-2. Extração Minuciosa do Título e Descrição:
-   - Se a ficha técnica (raw_specs) for sucinta, extraia ativamente todas as especificações presentes no título e no texto.
-   - Exemplos em Autopeças: Modelo/Veículo compatível (ex: Gol G5, Civic, Corolla), Faixa de Anos (ex: 2008 a 2014), Posição/Lado de montagem (Dianteiro, Traseiro, Par), Código OEM/Part Number, Fabricante da peça (Bosch, Fras-le, Cofap), Material (Cerâmica, Semi-metálica), etc.
-   - Exemplos em Papelaria: Gramatura (180g/m², 300g), Quantidade de folhas/páginas (50 folhas, 100 fls), Formato (A4, A5), Tipo de capa (Capa dura, Espiral), Composição da fibra (100% algodão, celulose), etc.
-   - Exemplos em Outras Categorias: Tensão/Voltagem, Torque, Bateria, Potência, Garantia, Dimensões, etc.
+2. Interpretação Técnica e Análise de Relação (ai_interpretation):
+   - Para CADA especificação identificada, forneça uma análise inteligente (ai_interpretation) explicando o relacionamento prático entre os produtos (ex: por que um é melhor, se são 100% equivalentes, ou se há risco de incompatibilidade).
+   - Indique o vencedor da especificação (winner_slot) quando aplicável.
+   - Indique o impacto prático (practical_impact) no dia a dia do usuário.
 
-3. Matriz Canônica (Chave a Chave):
-   - Crie uma linha para cada propriedade técnica relevante identificada entre os anúncios.
-   - O Slot ${baseSlotId} é a BASE DE REFERÊNCIA de confronto.
-   - Para cada um dos slots avaliados, preencha o valor e classifique a relação vs o Slot ${baseSlotId} como:
-     * [Idêntico]: Especificação tecnicamente equivalente ao Slot Base.
-     * [Superior (+)]: Especificação quantitativa ou qualitativa superior (ex: maior garantia, mais folhas, maior torque, material nobre).
-     * [Inferior (-)]: Especificação inferior (ex: menor durabilidade, menor garantia, menos peças).
-     * [Divergente]: Especificação diferente ou incompatível (ex: compatível com veículo diferente, posição traseira vs dianteira, cor diferente).
-     * [Não informado]: Quando o vendedor não informar o atributo.
+3. Classificação Rigorosa vs Slot Base (Slot ${baseSlotId}):
+   - Slot ${baseSlotId} é a BASE DE REFERÊNCIA de confronto.
+   - Para cada slot avaliado vs a Base, defina status:
+     * "base": Para o próprio Slot ${baseSlotId}.
+     * "equal": Tecnologicamente equivalente ou idêntico ao Slot Base.
+     * "superior": Especificação quantitativa ou qualitativa superior (ex: maior autonomia, material cerâmico vs orgânico, maior garantia, motor brushless).
+     * "inferior": Especificação inferior ao Slot Base (ex: menor capacidade, menor potência, menor garantia).
+     * "divergent": Especificação divergente que afeta compatibilidade ou propósito (ex: ano de veículo diferente, posição traseira vs dianteira, tipo de encaixe).
+     * "missing": Quando o atributo não foi informado pelo vendedor.
 
-4. Veredito Técnico e Comercial Contextualizado:
-   - Identifique armadilhas de preço baixo (ex.: Slot X é mais barato por ter material inferior, omitir código OEM, oferecer menos unidades/folhas ou ter menor período de garantia).
-   - Indique se a opção de menor custo é uma compra segura (equivalente) ou se exige cautela técnica.
-   - Em autopeças, reforce a importância da compatibilidade de modelo, ano e posição antes da compra.
+4. Detecção Ativa de Armadilhas Comerciais e Vantagens (key_findings):
+   - Destaque se o produto mais barato economiza em peças essenciais (ex: vende apenas 2 pastilhas em vez de 4, bateria menor, ausência de carregador, garantia de 90 dias vs 12 meses).
+   - Identifique riscos de incompatibilidade veicular ou técnica.
 
-FORMATO DE RETORNO OBRIGATÓRIO (JSON PURO):
+FORMATO DE RETORNO OBRIGATÓRIO (JSON PURO E VÁLIDO):
 {
-  "category": "Nome exato da categoria identificada (ex: Veículos & Autopeças, Papelaria & Artigos de Arte, etc.)",
+  "category": "Nome da Categoria Detectada (ex: Veículos & Autopeças, Ferramentas Elétricas, Papelaria & Arte)",
   "reference_slot": ${baseSlotId},
-  "specs_matrix": [
+  "key_findings": {
+    "top_advantages": [
+      { "slot_id": 1, "title": "Vantagem Marcante", "detail": "Explicação objetiva da superioridade técnica" }
+    ],
+    "critical_warnings": [
+      { "title": "Alerta de Armadilha / Incompatibilidade", "detail": "Detalhes sobre o risco ou divergência", "affected_slots": [3] }
+    ],
+    "convergences": [
+      "Pontos em que os produtos são 100% equivalentes"
+    ]
+  },
+  "comparison_matrix": [
     {
-      "attribute": "Nome da Especificação (ex: Compatibilidade / Veículos ou Gramatura / Espessura)",
-      "slot_1": "Valor do Slot 1",
-      "slot_2": "Valor do Slot 2 (Classificação)",
-      "slot_3": "Valor do Slot 3 (Classificação)",
-      "slot_4": "Valor do Slot 4",
-      "slot_5": "Valor do Slot 5"
+      "id": "spec_1",
+      "category": "Desempenho & Potência",
+      "attribute_name": "Nome Padronizado da Especificação",
+      "description": "Breve explicação do atributo",
+      "slot_values": {
+        "slot_1": "Valor extraído do Slot 1",
+        "slot_2": "Valor extraído do Slot 2",
+        "slot_3": "Valor extraído do Slot 3",
+        "slot_4": "Valor extraído do Slot 4",
+        "slot_5": "Valor extraído do Slot 5"
+      },
+      "comparisons": {
+        "slot_1": {
+          "value": "Valor formatado",
+          "status": "base",
+          "statusLabel": "Base de Referência",
+          "diffNote": "Referência inicial",
+          "isAdvantage": false
+        },
+        "slot_2": {
+          "value": "Valor formatado",
+          "status": "superior",
+          "statusLabel": "Superior (+50% torque)",
+          "diffNote": "+15 Nm a mais de torque",
+          "isAdvantage": true
+        }
+      },
+      "ai_interpretation": {
+        "summary": "Explicação técnica da IA inter-relacionando os produtos neste item.",
+        "winner_slot": 2,
+        "practical_impact": "Permite perfurar materiais mais densos sem travamento do motor.",
+        "severity": "high"
+      }
     }
   ],
-  "technical_verdict": "Veredito técnico de 2 a 3 frases apontando claramente as divergências do produto mais barato vs o Slot Base e qual oferece o melhor custo-benefício real."
+  "scores_by_slot": [
+    {
+      "slot_id": 1,
+      "advantages_count": 2,
+      "draws_count": 3,
+      "disadvantages_count": 1,
+      "missing_count": 0
+    }
+  ],
+  "technical_verdict": "Veredito técnico de 2 a 4 frases avaliando se a economia financeira compensa tecnicamente ou se há armadilhas.",
+  "executive_summary": "Resumo executivo completo das correlações."
 }`;
 
-    const prompt = `Analise detalhadamente os dados dos seguintes produtos capturados nos slots e gere a matriz de confronto técnico e financeiro:
+    const prompt = `Interprete profundamente os dados dos produtos abaixo, inter-relacione todas as especificações e gere a matriz comparativa:
 
 ${slotsPromptText}
 
-Gere o JSON rigorosamente estruturado conforme as instruções.`;
+Gere o JSON estritamente estruturado e detalhado conforme as instruções.`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: 'gemini-2.5-flash',
       contents: prompt,
       config: {
         systemInstruction,
