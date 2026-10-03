@@ -1432,15 +1432,34 @@ function extractBrandFromSlot(slot) {
   return 'Não especificada';
 }
 
+// Unidades de volume reconhecidas para extração rápida
+const VOLUME_UNIT_SET = new Set([
+  'folha', 'folhas', 'fl', 'fls',
+  'pagina', 'paginas', 'página', 'páginas', 'pag', 'pags', 'pg', 'pgs',
+  'peca', 'pecas', 'peça', 'peças', 'pc', 'pcs', 'pç', 'pças',
+  'item', 'itens',
+  'un', 'unid', 'unids', 'unidade', 'unidades'
+]);
+const NUMBER_UNIT_MATCH_REGEX = /\b(\d+)\s*([a-zçáàâãéêíóôõú]+)/gi;
+const BATTERY_UNIT_REGEX = /\b(\d+(?:\.\d+)?)\s*(mah|ah|v)\b/i;
+const PERF_REGEX_1 = /gramatura|gsm|densidade|peso|papel|fibra|algod[aã]o|celulose/i;
+const PERF_REGEX_2 = /pot[eê]ncia|torque|rpm|tens[aã]o|voltagem|chipset|processador/i;
+const PERF_REGEX_3 = /mem[oó]ria|resolu[cç][aã]o|fluxo|capacidade|fric[cç][aã]o/i;
+const EDITORIAL_GSM_REGEX = /\b(\d+)\s*(g\/?m[²2]?|gsm|g\b)/i;
+const EDITORIAL_COTTON_REGEX = /\b(100%\s*algod[aã]o|puro\s*algod[aã]o|celulose|mista)\b/i;
+const EDITORIAL_POWER_REGEX = /\b(\d+)\s*(w|v|nm|rpm|mah|ah)\b/i;
+
 // Extrai Quantidade de Folhas/Páginas/Unidades/Volume
 function extractVolumeFromSlot(slot) {
   if (!slot) return '1 Unidade';
   const fullText = `${slot.title || ''} ${JSON.stringify(slot.specs || {})}`;
-  const sheetsMatch = fullText.match(/(\d+)\s*(folhas?|fls?|p[áa]ginas?|pgs?|pe[çc]as?|pcs?|itens?|unidades?|unids?|un\b)/i);
-  if (sheetsMatch) {
-    return `${sheetsMatch[1]} ${sheetsMatch[2]}`;
+  const matches = fullText.matchAll(NUMBER_UNIT_MATCH_REGEX);
+  for (const match of matches) {
+    if (VOLUME_UNIT_SET.has(match[2].toLowerCase())) {
+      return `${match[1]} ${match[2]}`;
+    }
   }
-  const batteryMatch = fullText.match(/(\d+(?:\.\d+)?)\s*(mah|ah|v\b)/i);
+  const batteryMatch = BATTERY_UNIT_REGEX.exec(fullText);
   if (batteryMatch) {
     return `Autonomia: ${batteryMatch[1]}${batteryMatch[2]}`;
   }
@@ -1454,7 +1473,7 @@ function extractPerformanceSpecsFromSlot(slot) {
   const findings = [];
   
   for (const [k, v] of Object.entries(specs)) {
-    if (/gramatura|gsm|densidade|peso|papel|fibra|algod[aã]o|celulose|pot[eê]ncia|torque|rpm|tens[aã]o|voltagem|chipset|processador|mem[oó]ria|resolu[cç][aã]o|fluxo|capacidade|fric[cç][aã]o/i.test(k)) {
+    if (PERF_REGEX_1.test(k) || PERF_REGEX_2.test(k) || PERF_REGEX_3.test(k)) {
       findings.push(`${k}: ${v}`);
     }
   }
@@ -1465,9 +1484,9 @@ function extractPerformanceSpecsFromSlot(slot) {
 
   // Fallback via regex no título
   const title = slot.title || '';
-  const gsmMatch = title.match(/(\d+)\s*(g\/?m[²2]?|gsm|g\b)/i);
-  const cottonMatch = title.match(/(100%\s*algod[aã]o|puro\s*algod[aã]o|celulose|mista)/i);
-  const powerMatch = title.match(/(\d+)\s*(w|v|nm|rpm|mah|ah)/i);
+  const gsmMatch = EDITORIAL_GSM_REGEX.exec(title);
+  const cottonMatch = EDITORIAL_COTTON_REGEX.exec(title);
+  const powerMatch = EDITORIAL_POWER_REGEX.exec(title);
 
   const fallbackParts = [];
   if (gsmMatch) fallbackParts.push(`Gramatura: ${gsmMatch[0]}`);
@@ -1580,6 +1599,55 @@ function generateEditorialReportMarkdown(activeSlots, baseSlotId, specsMatrix, c
   return md;
 }
 
+async function requestGeminiModel(modelName, promptText, apiKey) {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      systemInstruction: {
+        parts: [{ text: EDITORIAL_SYSTEM_INSTRUCTION }]
+      },
+      contents: [{
+        parts: [{ text: promptText }]
+      }],
+      generationConfig: {
+        temperature: 0.25,
+      }
+    })
+  });
+
+  if (response.ok) {
+    const resJson = await response.json();
+    const text = resJson?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (text && text.trim().length > 0) {
+      return { success: true, text: text.trim() };
+    }
+  }
+
+  const errData = await response.json().catch(() => ({}));
+  const errorMsg = errData?.error?.message || `HTTP ${response.status} em ${modelName}`;
+  return { success: false, error: new Error(errorMsg) };
+}
+
+async function tryModelsSequentially(models, promptText, apiKey) {
+  let lastError = null;
+  const executeAttempt = async (index) => {
+    if (index >= models.length) {
+      throw lastError || new Error('Não foi possível obter resposta da API Gemini.');
+    }
+    const model = models[index];
+    try {
+      const result = await requestGeminiModel(model, promptText, apiKey);
+      if (result.success) return result.text;
+      lastError = result.error;
+    } catch (err) {
+      lastError = err;
+    }
+    return executeAttempt(index + 1);
+  };
+  return executeAttempt(0);
+}
+
 /**
  * Chamada Direta à API Google Gemini (via Fetch HTTP)
  */
@@ -1591,37 +1659,15 @@ async function callGeminiApiDirectly(activeSlots, baseSlotId, apiKey) {
       ? Object.entries(slot.specs).map(([k, v]) => `- ${k}: ${v}`).join('\n')
       : '');
     const isBase = slot.id === baseSlotId;
+    const totalVal = ((slot.price || 0) + (slot.shipping || 0)).toFixed(2);
     promptText += `--- SLOT ${slot.id} (${slot.platform}) ${isBase ? '[SLOT BASE DE REFERÊNCIA]' : ''} ---\n`;
     promptText += `Título: ${slot.title || 'Sem título'}\n`;
-    promptText += `Preço: R$ ${slot.price || 0} | Frete: R$ ${slot.shipping || 0}\n`;
+    promptText += `Preço: R$ ${slot.price || 0} | Frete: R$ ${slot.shipping || 0} | Desembolso Total: R$ ${totalVal}\n`;
     promptText += `Ficha Técnica / Texto Bruto:\n${specsText || slot.title}\n\n`;
   });
 
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      systemInstruction: {
-        parts: [{ text: EDITORIAL_SYSTEM_INSTRUCTION }]
-      },
-      contents: [{
-        parts: [{ text: promptText }]
-      }],
-      generationConfig: {
-        temperature: 0.2,
-      }
-    })
-  });
-
-  if (!response.ok) {
-    const errData = await response.json().catch(() => ({}));
-    throw new Error(errData?.error?.message || `HTTP ${response.status}`);
-  }
-
-  const resJson = await response.json();
-  const text = resJson?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error('Resposta vazia da API Gemini');
-  return text.trim();
+  const modelsToTry = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash'];
+  return tryModelsSequentially(modelsToTry, promptText, apiKey);
 }
 
 /**
@@ -1647,44 +1693,86 @@ async function callBackendEditorialApi(activeSlots, baseSlotId) {
  */
 function renderMarkdownContent(container, markdownText) {
   if (!container) return;
-  if (typeof window !== 'undefined' && window.marked && typeof window.marked.parse === 'function') {
-    container.innerHTML = window.marked.parse(markdownText);
-  } else {
-    container.innerHTML = formatMarkdownFallback(markdownText);
+  try {
+    if (typeof marked !== 'undefined' && typeof marked.parse === 'function') {
+      container.innerHTML = marked.parse(markdownText);
+      return;
+    }
+    if (typeof window !== 'undefined' && window.marked && typeof window.marked.parse === 'function') {
+      container.innerHTML = window.marked.parse(markdownText);
+      return;
+    }
+  } catch (err) {
+    console.warn('Erro ao processar markdown com marked.js:', err);
   }
+  container.innerHTML = formatMarkdownFallback(markdownText);
+}
+
+function applyInlineMarkdown(md) {
+  return md
+    .replace(/^### (.*$)/gim, '<h3 style="color:#38bdf8; font-size:13.5px; margin-top:14px; margin-bottom:8px; font-weight:700;">$1</h3>')
+    .replace(/^#### (.*$)/gim, '<h4 style="color:#f59e0b; font-size:12.5px; margin-top:12px; margin-bottom:6px; font-weight:700;">$1</h4>')
+    .replace(/\*\*(.*?)\*\*/gim, '<strong style="color:#f8fafc; font-weight:700;">$1</strong>')
+    .replace(/\*(.*?)\*/gim, '<em style="color:#94a3b8;">$1</em>')
+    .replace(/`([^`]+)`/gim, '<code style="background:#1e293b; color:#38bdf8; padding:1px 5px; border-radius:4px; font-family:monospace; font-size:11px;">$1</code>');
+}
+
+function renderTableRow(line, isHeader) {
+  const cells = line.slice(1, -1).split('|').map(c => c.trim());
+  const tag = isHeader ? 'th' : 'td';
+  const cellStyle = isHeader
+    ? 'padding:8px 10px; background:#1e293b; color:#38bdf8; font-weight:700; text-transform:uppercase; font-size:10.5px; border:1px solid #334155;'
+    : 'padding:8px 10px; border:1px solid #1e293b; color:#e2e8f0; font-size:11.5px; vertical-align:top;';
+  const cellHtml = cells.map(c => `<${tag} style="${cellStyle}">${c}</${tag}>`).join('');
+  return `<tr>${cellHtml}</tr>`;
+}
+
+function createTableHtml(tableRows) {
+  if (!tableRows.length) return '';
+  return `<div class="table-wrapper" style="margin:12px 0 16px 0; overflow-x:auto;"><table style="width:100%; border-collapse:collapse; background:#090d16; border:1px solid #334155;">${tableRows.join('')}</table></div>`;
 }
 
 // Fallback manual de formatação Markdown caso a lib não esteja no escopo
 function formatMarkdownFallback(md) {
-  let html = md
-    .replace(/^### (.*$)/gim, '<h3 style="color:#38bdf8; font-size:13.5px; margin-top:12px; margin-bottom:6px;">$1</h3>')
-    .replace(/^#### (.*$)/gim, '<h4 style="color:#f59e0b; font-size:12.5px; margin-top:10px; margin-bottom:4px;">$1</h4>')
-    .replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>')
-    .replace(/\*(.*?)\*/gim, '<em>$1</em>')
-    .replace(/`([^`]+)`/gim, '<code style="background:#1e293b; color:#38bdf8; padding:1px 4px; border-radius:3px;">$1</code>');
-
-  // Converte tabelas Markdown simples
+  if (!md) return '';
+  const html = applyInlineMarkdown(md);
   const lines = html.split('\n');
-  let inTable = false;
-  let tableHtml = '<table style="width:100%; border-collapse:collapse; margin:10px 0;">';
+  const output = [];
+  let tableRows = [];
 
-  const processedLines = lines.map(line => {
-    if (line.trim().startsWith('|') && line.trim().endsWith('|')) {
-      if (line.includes('---')) return ''; // divisor
-      const cells = line.split('|').filter((_, idx, arr) => idx > 0 && idx < arr.length - 1);
-      const isHeader = !inTable;
-      inTable = true;
-      const tag = isHeader ? 'th' : 'td';
-      const row = `<tr>${cells.map(c => `<${tag} style="padding:6px 8px; border:1px solid #334155;">${c.trim()}</${tag}>`).join('')}</tr>`;
-      return row;
-    } else if (inTable) {
-      inTable = false;
-      return '</table>' + (line ? `<p style="margin-bottom:8px;">${line}</p>` : '');
+  const flushTable = () => {
+    if (tableRows.length > 0) {
+      output.push(createTableHtml(tableRows));
+      tableRows = [];
     }
-    return line ? `<p style="margin-bottom:8px;">${line}</p>` : '';
-  });
+  };
 
-  return processedLines.join('');
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      flushTable();
+      continue;
+    }
+
+    if (line.startsWith('|') && line.endsWith('|')) {
+      if (!line.includes('---')) {
+        const isHeader = tableRows.length === 0;
+        tableRows.push(renderTableRow(line, isHeader));
+      }
+      continue;
+    }
+
+    flushTable();
+
+    if (line.startsWith('<h3') || line.startsWith('<h4')) {
+      output.push(line);
+    } else {
+      output.push(`<p style="margin-bottom:10px; color:#cbd5e1; line-height:1.65;">${line}</p>`);
+    }
+  }
+
+  flushTable();
+  return output.join('\n');
 }
 
 /**
