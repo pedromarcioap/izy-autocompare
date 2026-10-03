@@ -84,6 +84,7 @@ FORMATO DE RETORNO OBRIGATÓRIO (JSON PURO E VÁLIDO):
 {
   "category": "Nome da Categoria Detectada (ex: Veículos & Autopeças, Ferramentas Elétricas, Papelaria & Arte)",
   "reference_slot": ${baseSlotId},
+  "editorial_report_markdown": "Relatório Editorial Comparativo estruturado rigorosamente em Markdown nas 3 seções obrigatórias: ### 1. Introdução e Contexto\\n\\n### 2. Tabela: \\\"Comparativo Geral dos Produtos\\\" (com colunas Slot / Item, Produto / Marca, Preço Médio (BRL), Qtd. de Folhas / Páginas / Unidades, Especificações Centrais de Performance, Qualidade, Construção e Acabamento)\\n\\n### 3. \\\"Análise Detalhada por Critérios\\\" (Dissecação em Prosa com #### Faixa de Preço e Custo-Benefício, #### Volume e Autonomia, #### Qualidade dos Materiais e Performance, #### Construção e Acabamento).",
   "key_findings": {
     "top_advantages": [
       { "slot_id": 1, "title": "Vantagem Marcante", "detail": "Explicação objetiva da superioridade técnica" }
@@ -145,7 +146,7 @@ FORMATO DE RETORNO OBRIGATÓRIO (JSON PURO E VÁLIDO):
   "executive_summary": "Resumo executivo completo das correlações."
 }`;
 
-    const prompt = `Interprete profundamente os dados dos produtos abaixo, inter-relacione todas as especificações e gere a matriz comparativa:
+    const prompt = `Interprete profundamente os dados dos produtos abaixo, inter-relacione todas as especificações e gere a matriz comparativa e o relatório editorial comparativo:
 
 ${slotsPromptText}
 
@@ -165,6 +166,7 @@ Gere o JSON estritamente estruturado e detalhado conforme as instruções.`;
 
     return res.json({
       success: true,
+      markdown_report: parsedData.editorial_report_markdown || parsedData.technical_verdict || '',
       data: parsedData,
     });
   } catch (error: any) {

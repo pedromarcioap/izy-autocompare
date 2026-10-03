@@ -4,9 +4,42 @@
  * Suporta Papelaria, Veículos & Autopeças, Ferramentas, Informática, Áudio, etc.
  */
 
+const EDITORIAL_SYSTEM_INSTRUCTION = `Você é um Consultor Especialista e Auditor Técnico em E-commerce, Produtos e Análise Comparativa de Alto Nível.
+Sua missão é gerar uma análise editorial aprofundada, humana, técnica e com acabamento de consultoria artística/especializada comparando os produtos fornecidos nos slots (Slot 1 a Slot 5).
+
+ESTRUTURA MANDATÓRIA DA RESPOSTA (ESTRITAMENTE NESTAS 3 SEÇÕES EM MARKDOWN FORMATADO):
+
+### 1. Introdução e Contexto
+Uma frase introdutória clara identificando os produtos comparados, as plataformas e o foco da auditoria.
+
+### 2. Tabela: "Comparativo Geral dos Produtos"
+Uma tabela Markdown limpa com as seguintes colunas essenciais:
+| Slot / Item | Produto / Marca | Preço Médio (BRL) | Qtd. de Folhas / Páginas / Unidades | Especificações Centrais de Performance | Qualidade, Construção e Acabamento |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+
+(Preencha cada linha para todos os slots ativos com precisão técnica e métricas reais extraídas dos anúncios).
+
+### 3. "Análise Detalhada por Critérios" (Dissecação em Prosa)
+Subseções analíticas aprofundadas abordando os pilares de decisão de compra:
+
+#### Faixa de Preço e Custo-Benefício
+Discuta quem atua na faixa de entrada (para uso despretensioso/volume) e quem atua no segmento premium/profissional, justificando o salto de preço.
+
+#### Volume e Autonomia
+Comparação direta de quantidade de folhas, páginas, peças, capacidade, bateria ou durabilidade entre as opções.
+
+#### Qualidade dos Materiais e Performance
+Comparação minuciosa do comportamento prático dos materiais (ex.: resistência do papel à água/técnicas mistas, estabilidade térmica, etc.). Indique claramente quem suporta uso exigente e quem serve apenas para estudo ou uso leve.
+
+#### Construção e Acabamento
+Avaliação da durabilidade física, encadernação/carcaça, usabilidade prática (ex.: abertura plana lay-flat, conexões, robustez).`;
+
 let currentSlots = [null, null, null, null, null];
 let selectedBaseSlot = 1;
 let currentAIResult = null;
+let currentAIEditorialReport = '';
+let geminiApiKey = '';
+let isGeneratingEditorial = false;
 
 // Initialize on DOM load
 document.addEventListener('DOMContentLoaded', () => {
@@ -16,7 +49,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Load slots from chrome.storage.local
 function loadSlotsFromStorage() {
-  chrome.storage.local.get(['slots', 'selectedBaseSlot'], (result) => {
+  chrome.storage.local.get(['slots', 'selectedBaseSlot', 'geminiApiKey'], (result) => {
     if (result.slots && Array.isArray(result.slots) && result.slots.length === 5) {
       currentSlots = result.slots;
     } else {
@@ -25,6 +58,11 @@ function loadSlotsFromStorage() {
     }
     if (result.selectedBaseSlot) {
       selectedBaseSlot = result.selectedBaseSlot;
+    }
+    if (result.geminiApiKey) {
+      geminiApiKey = result.geminiApiKey;
+      const input = document.getElementById('inputGeminiApiKey');
+      if (input) input.value = geminiApiKey;
     }
     renderUI();
   });
@@ -55,6 +93,7 @@ function setupEventListeners() {
     if (confirm('Deseja realmente limpar todos os 5 slots?')) {
       currentSlots = [null, null, null, null, null];
       selectedBaseSlot = 1;
+      currentAIEditorialReport = '';
       chrome.storage.local.set({ slots: currentSlots, selectedBaseSlot: 1 }, () => {
         renderUI();
         showStatus('Todos os slots foram limpos.', 'success');
@@ -62,7 +101,34 @@ function setupEventListeners() {
     }
   });
 
-  // Copy full report
+  // Toggle API Key section
+  document.getElementById('btnToggleApiKey')?.addEventListener('click', () => {
+    const sec = document.getElementById('apiKeySection');
+    if (sec) {
+      sec.style.display = sec.style.display === 'none' ? 'block' : 'none';
+    }
+  });
+
+  // Save API Key
+  document.getElementById('btnSaveApiKey')?.addEventListener('click', () => {
+    const input = document.getElementById('inputGeminiApiKey');
+    if (input) {
+      geminiApiKey = input.value.trim();
+      chrome.storage.local.set({ geminiApiKey }, () => {
+        showStatus('Chave de API Gemini salva com sucesso!', 'success');
+        const sec = document.getElementById('apiKeySection');
+        if (sec) sec.style.display = 'none';
+        void generateAndRenderEditorialReport(true);
+      });
+    }
+  });
+
+  // Regenerate Report
+  document.getElementById('btnRegenerateReport')?.addEventListener('click', () => {
+    void generateAndRenderEditorialReport(true);
+  });
+
+  // Copy full formatted markdown report
   document.getElementById('btnCopyReport')?.addEventListener('click', copyComparisonReport);
 
   // Search filter
@@ -1145,7 +1211,8 @@ function renderUI() {
   const activeProducts = currentSlots.filter(s => s !== null);
   const activeCount = activeProducts.length;
 
-  document.getElementById('slotCountLabel').innerText = `${activeCount}/5`;
+  const countLabel = document.getElementById('slotCountLabel');
+  if (countLabel) countLabel.innerText = `${activeCount}/5`;
 
   // Garante que o slot base selecionado existe nos ativos
   const activeIds = activeProducts.map(p => p.id);
@@ -1164,24 +1231,26 @@ function renderUI() {
   const emptyState = document.getElementById('emptyComparisonState');
 
   if (activeCount >= 2) {
-    compSection.style.display = 'block';
-    emptyState.style.display = 'none';
+    if (compSection) compSection.style.display = 'block';
+    if (emptyState) emptyState.style.display = 'none';
 
     currentAIResult = processAIAuditLocal(currentSlots, selectedBaseSlot);
 
     renderFinancialMatrix(activeProducts);
     renderSpecsMatrixTable(currentAIResult, activeProducts);
-    renderExecutiveVerdict(currentAIResult, activeProducts);
+    void generateAndRenderEditorialReport(false);
   } else {
-    compSection.style.display = 'none';
-    emptyState.style.display = 'block';
+    if (compSection) compSection.style.display = 'none';
+    if (emptyState) emptyState.style.display = 'block';
     currentAIResult = null;
+    currentAIEditorialReport = '';
   }
 }
 
 // Render Financial Matrix Table
 function renderFinancialMatrix(activeProducts) {
   const table = document.getElementById('financialTable');
+  if (!table) return;
   
   let minTotal = Infinity;
   activeProducts.forEach(p => {
@@ -1250,6 +1319,7 @@ function renderFinancialMatrix(activeProducts) {
 // Render Specs Matrix Table (specs_matrix)
 function renderSpecsMatrixTable(aiResult, activeProducts) {
   const table = document.getElementById('specMatrixTable');
+  if (!table) return;
 
   let html = `
     <thead>
@@ -1342,50 +1412,373 @@ function filterSpecMatrix(query) {
   });
 }
 
-// Render Executive Verdict
-function renderExecutiveVerdict(aiResult, activeProducts) {
-  const container = document.getElementById('verdictContent');
-  if (!aiResult) return;
+/**
+ * =====================================================================
+ * GERADOR EDITORIAL COMPARATIVO & INTEGRAÇÃO GEMINI IA
+ * =====================================================================
+ */
 
-  container.innerHTML = `
-    <div style="margin-bottom: 6px; font-weight: 600; color: #f8fafc;">
-      🏷️ <strong>Categoria Identificada:</strong> ${aiResult.category || 'Geral'}
-    </div>
-    <div style="color: #cbd5e1; font-size: 12px; line-height: 1.5;">
-      ${aiResult.technical_verdict}
-    </div>
-  `;
+// Extrai Marca/Fabricante provável do slot
+function extractBrandFromSlot(slot) {
+  if (!slot) return 'Genérico / Não informado';
+  const specs = slot.specs || {};
+  for (const [k, v] of Object.entries(specs)) {
+    if (/marca|fabricante|brand|manufacturer/i.test(k) && v) return v.trim();
+  }
+  const titleParts = (slot.title || '').split(/[\s\-–—|,]+/);
+  if (titleParts.length > 0 && titleParts[0].length >= 3 && !/kit|conjunto|jogo|caderno|papel|par|pastilha|parafusadeira/i.test(titleParts[0])) {
+    return titleParts[0];
+  }
+  return 'Não especificada';
 }
 
-// Copy Comparison Report with full specs_matrix table
+// Extrai Quantidade de Folhas/Páginas/Unidades/Volume
+function extractVolumeFromSlot(slot) {
+  if (!slot) return '1 Unidade';
+  const fullText = `${slot.title || ''} ${JSON.stringify(slot.specs || {})}`;
+  const sheetsMatch = fullText.match(/(\d+)\s*(folhas?|fls?|p[áa]ginas?|pgs?|pe[çc]as?|pcs?|itens?|unidades?|unids?|un\b)/i);
+  if (sheetsMatch) {
+    return `${sheetsMatch[1]} ${sheetsMatch[2]}`;
+  }
+  const batteryMatch = fullText.match(/(\d+(?:\.\d+)?)\s*(mah|ah|v\b)/i);
+  if (batteryMatch) {
+    return `Autonomia: ${batteryMatch[1]}${batteryMatch[2]}`;
+  }
+  return '1 Unidade informada';
+}
+
+// Extrai Especificações Centrais de Performance
+function extractPerformanceSpecsFromSlot(slot) {
+  if (!slot) return 'Especificação padrão';
+  const specs = slot.specs || {};
+  const findings = [];
+  
+  for (const [k, v] of Object.entries(specs)) {
+    if (/gramatura|gsm|densidade|peso|papel|fibra|algod[aã]o|celulose|pot[eê]ncia|torque|rpm|tens[aã]o|voltagem|chipset|processador|mem[oó]ria|resolu[cç][aã]o|fluxo|capacidade|fric[cç][aã]o/i.test(k)) {
+      findings.push(`${k}: ${v}`);
+    }
+  }
+
+  if (findings.length > 0) {
+    return findings.slice(0, 3).join(' • ');
+  }
+
+  // Fallback via regex no título
+  const title = slot.title || '';
+  const gsmMatch = title.match(/(\d+)\s*(g\/?m[²2]?|gsm|g\b)/i);
+  const cottonMatch = title.match(/(100%\s*algod[aã]o|puro\s*algod[aã]o|celulose|mista)/i);
+  const powerMatch = title.match(/(\d+)\s*(w|v|nm|rpm|mah|ah)/i);
+
+  const fallbackParts = [];
+  if (gsmMatch) fallbackParts.push(`Gramatura: ${gsmMatch[0]}`);
+  if (cottonMatch) fallbackParts.push(`Composição: ${cottonMatch[0]}`);
+  if (powerMatch) fallbackParts.push(`Potência/Elétrica: ${powerMatch[0]}`);
+
+  return fallbackParts.length > 0 ? fallbackParts.join(' • ') : 'Desempenho padrão de catálogo';
+}
+
+// Extrai Qualidade, Construção e Acabamento
+function extractQualityFinishFromSlot(slot) {
+  if (!slot) return 'Acabamento comercial padrão';
+  const specs = slot.specs || {};
+  const findings = [];
+
+  for (const [k, v] of Object.entries(specs)) {
+    if (/capa|encaderna[cç][aã]o|costura|wire-o|espiral|revestimento|acabamento|material|carca[cç]a|estrutura|durabilidade|oem|posi[cç][aã]o/i.test(k)) {
+      findings.push(`${k}: ${v}`);
+    }
+  }
+
+  if (findings.length > 0) {
+    return findings.slice(0, 2).join(' • ');
+  }
+
+  const title = (slot.title || '').toLowerCase();
+  if (title.includes('capa dura') || title.includes('hardcover')) return 'Capa dura estruturada com encadernação firme';
+  if (title.includes('lay-flat') || title.includes('costurado')) return 'Abertura plana 180° com costura reforçada';
+  if (title.includes('brushless') || title.includes('sem escova')) return 'Motor Brushless de alta durabilidade e baixo atrito';
+  if (title.includes('cer[aâ]mic') || title.includes('original')) return 'Composto de alta estabilidade e durabilidade estrutural';
+
+  return 'Construção comercial padrão com acabamento convencional';
+}
+
+/**
+ * Construtor Heurístico de Alta Qualidade do Relatório Editorial Comparativo (Fallback Dinâmico)
+ * Estrutura rigorosamente as 3 seções obrigatórias
+ */
+function generateEditorialReportMarkdown(activeSlots, baseSlotId, specsMatrix, category) {
+  const baseSlot = activeSlots.find(s => s.id === baseSlotId) || activeSlots[0];
+  
+  // 1. Identifica produtos e faixas de preço
+  let minTotal = Infinity;
+  let maxTotal = -Infinity;
+  let minSlot = activeSlots[0];
+  let maxSlot = activeSlots[0];
+
+  activeSlots.forEach(s => {
+    const tot = (s.price || 0) + (s.shipping || 0);
+    if (tot < minTotal) {
+      minTotal = tot;
+      minSlot = s;
+    }
+    if (tot > maxTotal) {
+      maxTotal = tot;
+      maxSlot = s;
+    }
+  });
+
+  const namesList = activeSlots.map(s => `**Slot ${s.id}** (${s.platform} - _${s.title.slice(0, 45)}..._)`).join(', ');
+
+  // SEÇÃO 1: Introdução e Contexto
+  let md = `### 1. Introdução e Contexto\n\n`;
+  md += `Esta auditoria técnica comparativa avalia minuciosamente as propostas de valor entre ${namesList}, confrontando parâmetros de custo total, especificações de rendimento e robustez de construção para a categoria **${category}**.\n\n`;
+
+  // SEÇÃO 2: Tabela: Comparativo Geral dos Produtos
+  md += `### 2. Tabela: "Comparativo Geral dos Produtos"\n\n`;
+  md += `| Slot / Item | Produto / Marca | Preço Médio (BRL) | Qtd. de Folhas / Páginas / Unidades | Especificações Centrais de Performance | Qualidade, Construção e Acabamento |\n`;
+  md += `| :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+
+  activeSlots.forEach(s => {
+    const total = (s.price || 0) + (s.shipping || 0);
+    const brand = extractBrandFromSlot(s);
+    const volume = extractVolumeFromSlot(s);
+    const perf = extractPerformanceSpecsFromSlot(s);
+    const finish = extractQualityFinishFromSlot(s);
+    const isBase = s.id === baseSlotId;
+
+    md += `| **Slot ${s.id}** (${s.platform})${isBase ? ' ★ Base' : ''} | **${brand}** - ${s.title.slice(0, 35)}... | \`${formatCurrency(total)}\` | ${volume} | ${perf} | ${finish} |\n`;
+  });
+
+  md += `\n`;
+
+  // SEÇÃO 3: Análise Detalhada por Critérios (Dissecação em Prosa)
+  md += `### 3. "Análise Detalhada por Critérios" (Dissecação em Prosa)\n\n`;
+
+  // Faixa de Preço e Custo-Benefício
+  md += `#### Faixa de Preço e Custo-Benefício\n`;
+  if (minSlot.id === maxSlot.id) {
+    md += `Os produtos avaliados operam em patamar de preço muito próximo (\`${formatCurrency(minTotal)}\`), de modo que a decisão de compra deve se basear exclusivamente na qualidade intrínseca dos materiais e na procedência do vendedor.\n\n`;
+  } else {
+    const diff = maxTotal - minTotal;
+    const diffPct = minTotal > 0 ? Math.round((diff / minTotal) * 100) : 0;
+    md += `O **Slot ${minSlot.id} (${minSlot.platform})** posiciona-se diretamente na faixa de entrada com desembolso total de **${formatCurrency(minTotal)}**, tornando-se a alternativa ideal para quem busca volume de produção ou uso despretensioso sem onerar o orçamento. Por outro lado, o **Slot ${maxSlot.id} (${maxSlot.platform})** atua no segmento premium/profissional a **${formatCurrency(maxTotal)}** (+${diffPct}% / +${formatCurrency(diff)}), salto de valor que se justifica pela entrega de maior rigor construtivo, certificações e estabilidade sob carga severa.\n\n`;
+  }
+
+  // Volume e Autonomia
+  md += `#### Volume e Autonomia\n`;
+  const volumes = activeSlots.map(s => `**Slot ${s.id}**: ${extractVolumeFromSlot(s)}`).join(' vs ');
+  md += `Na comparação direta de capacidade e rendimento (${volumes}), nota-se que as opções de entrada buscam maximizar o retorno quantitativo por real investido, enquanto os modelos superiores priorizam a constância métrica e a preservação da integridade física durante ciclos extensos de uso.\n\n`;
+
+  // Qualidade dos Materiais e Performance
+  md += `#### Qualidade dos Materiais e Performance\n`;
+  md += `A dissecação dos materiais revela distinções fundamentais de comportamento prático: enquanto o **Slot ${baseSlot.id}** (${baseSlot.platform}) assegura estabilidade técnica e resistência compatível com aplicações exigentes (suportando técnicas mistas, cargas térmicas ou fricção contínua), alternativas mais acessíveis servem com louvor para estudo, tarefas diárias e operação leve, mas demandam cautela contra deformações precoces quando expostas a estresse elevado.\n\n`;
+
+  // Construção e Acabamento
+  md += `#### Construção e Acabamento\n`;
+  md += `No quesito integridade física e usabilidade, o **Slot ${baseSlot.id}** destaca-se pela solidez estrutural e refinamento ergonômico (garantindo abertura plana lay-flat, conexões seguras e durabilidade da carcaça). Os demais slots oferecem acabamentos funcionais para o dia a dia, sendo indispensável validar tolerâncias e encaixes antes de aplicações críticas.\n`;
+
+  return md;
+}
+
+/**
+ * Chamada Direta à API Google Gemini (via Fetch HTTP)
+ */
+async function callGeminiApiDirectly(activeSlots, baseSlotId, apiKey) {
+  let promptText = `Gere o Relatório Editorial Comparativo estruturado estritamente nas 3 seções obrigatórias para os produtos abaixo:\n\n`;
+  
+  activeSlots.forEach(slot => {
+    const specsText = slot.raw_specs || (slot.specs
+      ? Object.entries(slot.specs).map(([k, v]) => `- ${k}: ${v}`).join('\n')
+      : '');
+    const isBase = slot.id === baseSlotId;
+    promptText += `--- SLOT ${slot.id} (${slot.platform}) ${isBase ? '[SLOT BASE DE REFERÊNCIA]' : ''} ---\n`;
+    promptText += `Título: ${slot.title || 'Sem título'}\n`;
+    promptText += `Preço: R$ ${slot.price || 0} | Frete: R$ ${slot.shipping || 0}\n`;
+    promptText += `Ficha Técnica / Texto Bruto:\n${specsText || slot.title}\n\n`;
+  });
+
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      systemInstruction: {
+        parts: [{ text: EDITORIAL_SYSTEM_INSTRUCTION }]
+      },
+      contents: [{
+        parts: [{ text: promptText }]
+      }],
+      generationConfig: {
+        temperature: 0.2,
+      }
+    })
+  });
+
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({}));
+    throw new Error(errData?.error?.message || `HTTP ${response.status}`);
+  }
+
+  const resJson = await response.json();
+  const text = resJson?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error('Resposta vazia da API Gemini');
+  return text.trim();
+}
+
+/**
+ * Chamada ao Backend local se disponível (/api/ai-audit)
+ */
+async function callBackendEditorialApi(activeSlots, baseSlotId) {
+  const res = await fetch('http://localhost:3000/api/ai-audit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slots: currentSlots, baseSlotId, report_format: 'markdown' }),
+  });
+
+  if (!res.ok) throw new Error(`Backend retornou HTTP ${res.status}`);
+  const json = await res.json();
+  if (json.markdown_report) return json.markdown_report;
+  if (json.data?.editorial_report_markdown) return json.data.editorial_report_markdown;
+  if (json.data?.technical_verdict) return json.data.technical_verdict;
+  throw new Error('Nenhum markdown retornado pelo backend');
+}
+
+/**
+ * Renderizador de Markdown seguro (com marked.js ou fallback estruturado)
+ */
+function renderMarkdownContent(container, markdownText) {
+  if (!container) return;
+  if (typeof window !== 'undefined' && window.marked && typeof window.marked.parse === 'function') {
+    container.innerHTML = window.marked.parse(markdownText);
+  } else {
+    container.innerHTML = formatMarkdownFallback(markdownText);
+  }
+}
+
+// Fallback manual de formatação Markdown caso a lib não esteja no escopo
+function formatMarkdownFallback(md) {
+  let html = md
+    .replace(/^### (.*$)/gim, '<h3 style="color:#38bdf8; font-size:13.5px; margin-top:12px; margin-bottom:6px;">$1</h3>')
+    .replace(/^#### (.*$)/gim, '<h4 style="color:#f59e0b; font-size:12.5px; margin-top:10px; margin-bottom:4px;">$1</h4>')
+    .replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/gim, '<em>$1</em>')
+    .replace(/`([^`]+)`/gim, '<code style="background:#1e293b; color:#38bdf8; padding:1px 4px; border-radius:3px;">$1</code>');
+
+  // Converte tabelas Markdown simples
+  const lines = html.split('\n');
+  let inTable = false;
+  let tableHtml = '<table style="width:100%; border-collapse:collapse; margin:10px 0;">';
+
+  const processedLines = lines.map(line => {
+    if (line.trim().startsWith('|') && line.trim().endsWith('|')) {
+      if (line.includes('---')) return ''; // divisor
+      const cells = line.split('|').filter((_, idx, arr) => idx > 0 && idx < arr.length - 1);
+      const isHeader = !inTable;
+      inTable = true;
+      const tag = isHeader ? 'th' : 'td';
+      const row = `<tr>${cells.map(c => `<${tag} style="padding:6px 8px; border:1px solid #334155;">${c.trim()}</${tag}>`).join('')}</tr>`;
+      return row;
+    } else if (inTable) {
+      inTable = false;
+      return '</table>' + (line ? `<p style="margin-bottom:8px;">${line}</p>` : '');
+    }
+    return line ? `<p style="margin-bottom:8px;">${line}</p>` : '';
+  });
+
+  return processedLines.join('');
+}
+
+/**
+ * Dispara e Gerencia a Geração e Renderização do Relatório Editorial
+ */
+async function generateAndRenderEditorialReport(forceRefresh = false) {
+  const activeSlots = currentSlots.filter(s => s !== null);
+  if (activeSlots.length < 2) return;
+
+  const container = document.getElementById('verdictContent');
+  if (!container) return;
+
+  if (!forceRefresh && currentAIEditorialReport) {
+    renderMarkdownContent(container, currentAIEditorialReport);
+    return;
+  }
+
+  isGeneratingEditorial = true;
+  container.innerHTML = `
+    <div class="ai-loading-skeleton">
+      <div style="font-size: 11px; color: #38bdf8; font-weight: 600; margin-bottom: 4px;">
+        ✨ Gerando Relatório Editorial Comparativo com IA...
+      </div>
+      <div class="skeleton-line" style="width: 90%;"></div>
+      <div class="skeleton-line" style="width: 75%;"></div>
+      <div class="skeleton-line" style="width: 85%;"></div>
+      <div class="skeleton-line" style="width: 60%;"></div>
+    </div>
+  `;
+
+  try {
+    let reportMarkdown = '';
+
+    // 1. Tenta chamada direta à API Gemini se chave configurada
+    if (geminiApiKey) {
+      try {
+        reportMarkdown = await callGeminiApiDirectly(activeSlots, selectedBaseSlot, geminiApiKey);
+      } catch (geminiErr) {
+        console.warn('Falha na chamada direta da API Gemini:', geminiErr);
+      }
+    }
+
+    // 2. Se não tem chave direta ou falhou, tenta servidor local /api/ai-audit
+    if (!reportMarkdown) {
+      try {
+        reportMarkdown = await callBackendEditorialApi(activeSlots, selectedBaseSlot);
+      } catch (backendErr) {
+        // Silencioso - fallback heurístico assume
+      }
+    }
+
+    // 3. Se offline ou sem retorno remoto, gera síntese editorial aprofundada estruturada
+    if (!reportMarkdown) {
+      const category = detectCategoryDynamically(activeSlots);
+      const specsMatrix = currentAIResult?.specs_matrix || [];
+      reportMarkdown = generateEditorialReportMarkdown(activeSlots, selectedBaseSlot, specsMatrix, category);
+    }
+
+    currentAIEditorialReport = reportMarkdown;
+    renderMarkdownContent(container, currentAIEditorialReport);
+  } catch (err) {
+    console.error('Erro na geração do relatório:', err);
+    container.innerHTML = `<div style="color: #f43f5e; padding: 8px;">Erro ao gerar relatório editorial: ${err.message}</div>`;
+  } finally {
+    isGeneratingEditorial = false;
+  }
+}
+
+// Copy Formatted Markdown Report to clipboard
 function copyComparisonReport() {
-  const activeProducts = currentSlots.filter(s => s !== null);
-  if (activeProducts.length < 2 || !currentAIResult) return;
+  if (!currentAIEditorialReport) {
+    const activeProducts = currentSlots.filter(s => s !== null);
+    if (activeProducts.length >= 2) {
+      const category = detectCategoryDynamically(activeProducts);
+      const specsMatrix = currentAIResult?.specs_matrix || [];
+      currentAIEditorialReport = generateEditorialReportMarkdown(activeProducts, selectedBaseSlot, specsMatrix, category);
+    }
+  }
 
-  let report = `📊 *AUTOCOMPARE MULTI-MARKETPLACE (AUDITORIA TÉCNICA)*\n`;
-  report += `🏷️ *Categoria:* ${currentAIResult.category}\n`;
-  report += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-  activeProducts.forEach(p => {
-    const total = (p.price || 0) + (p.shipping || 0);
-    const isBase = p.id === selectedBaseSlot;
-    report += `📦 *Slot ${p.id} (${p.platform})${isBase ? ' [BASE]' : ''}:* ${p.title}\n`;
-    report += `💰 *Total:* ${formatCurrency(total)} (Base: ${formatCurrency(p.price)} | Frete: ${formatCurrency(p.shipping)})\n`;
-  });
-  report += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-  report += `⚖️ *VEREDITO TÉCNICO E COMERCIAL:*\n${currentAIResult.technical_verdict.replace(/<[^>]*>?/gm, '')}\n\n`;
-  report += `🔍 *MATRIZ CANÔNICA DE ESPECIFICAÇÕES (CHAVE A CHAVE):*\n`;
-  currentAIResult.specs_matrix.forEach(row => {
-    report += `• *${row.attribute}:*\n`;
-    activeProducts.forEach(p => {
-      const val = row[`slot_${p.id}`] || 'Não informada';
-      report += `   - Slot ${p.id}: ${val}\n`;
-    });
-  });
-  report += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-  report += `Gerado via AutoCompare Chrome Extension`;
+  if (!currentAIEditorialReport) {
+    showStatus('Nenhum relatório disponível para cópia!', 'warning');
+    return;
+  }
 
-  navigator.clipboard.writeText(report).then(() => {
-    showStatus('Relatório completo copiado para a área de transferência!', 'success');
+  navigator.clipboard.writeText(currentAIEditorialReport).then(() => {
+    showStatus('Relatório formatado em Markdown copiado com sucesso!', 'success');
+    const btn = document.getElementById('btnCopyReport');
+    if (btn) {
+      const originalText = btn.innerHTML;
+      btn.innerHTML = '✅ Copiado!';
+      setTimeout(() => {
+        btn.innerHTML = originalText;
+      }, 2500);
+    }
   }).catch((err) => {
     showStatus('Erro ao copiar relatório: ' + err.message, 'error');
   });
@@ -1394,6 +1787,7 @@ function copyComparisonReport() {
 // Show banner status
 function showStatus(message, type = 'info') {
   const el = document.getElementById('statusMessage');
+  if (!el) return;
   el.style.display = 'block';
   el.innerText = message;
 
@@ -1419,3 +1813,4 @@ function showStatus(message, type = 'info') {
     el.style.display = 'none';
   }, 4000);
 }
+

@@ -66,9 +66,33 @@
           <span style="font-size: 10px; color: #94a3b8; font-family: monospace;">COMPARAÇÃO TÉCNICA ENTRE SLOTS</span>
         </div>
       </div>
-      <button id="btnClearAll" class="btn-secondary" style="padding: 4px 8px; font-size: 11px;" title="Limpar todos os 5 slots">
-        🗑️ Limpar Todos
-      </button>
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <button id="btnToggleApiKey" class="btn-secondary" style="padding: 4px 8px; font-size: 11px;" title="Configurar chave da API Gemini">
+          🔑 API Key
+        </button>
+        <button id="btnClearAll" class="btn-secondary" style="padding: 4px 8px; font-size: 11px;" title="Limpar todos os 5 slots">
+          🗑️ Limpar Todos
+        </button>
+      </div>
+    </div>
+
+    <!-- Collapsible API Key settings -->
+    <div id="apiKeySection" style="display: none; background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 8px 10px; margin-bottom: 8px;">
+      <div style="font-size: 11px; color: #94a3b8; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center;">
+        <span>Chave de API do Google Gemini (opcional):</span>
+        <span style="font-size: 10px; color: #38bdf8;">Salva localmente</span>
+      </div>
+      <div style="display: flex; gap: 6px;">
+        <input
+          type="password"
+          id="inputGeminiApiKey"
+          placeholder="Cole sua GEMINI_API_KEY..."
+          style="flex: 1; background: #090d16; border: 1px solid #334155; border-radius: 6px; padding: 4px 8px; color: #fff; font-size: 11px;"
+        />
+        <button id="btnSaveApiKey" class="btn-secondary" style="padding: 4px 10px; font-size: 11px; background: #0284c7; color: #fff; border-color: #38bdf8;">
+          Salvar
+        </button>
+      </div>
     </div>
 
     <!-- Main Capture Button -->
@@ -140,15 +164,26 @@
       </table>
     </div>
 
-    <!-- Executive Verdict & Export Actions -->
-    <div id="verdictCard" style="margin-top: 16px; background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; padding: 12px;">
-      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-        <span style="font-weight: 700; color: #f59e0b; font-size: 12px; text-transform: uppercase;">⚖️ Veredito Técnico da IA</span>
-        <button id="btnCopyReport" class="btn-secondary" style="padding: 4px 8px; font-size: 11px;">
-          📋 Copiar Relatório
-        </button>
+    <!-- Editorial Comparative Report & AI Verdict -->
+    <div id="verdictCard" class="editorial-card">
+      <div class="editorial-header">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 16px;">📑</span>
+          <div>
+            <div style="font-weight: 800; color: #f8fafc; font-size: 13px;">Relatório Editorial Comparativo</div>
+            <div style="font-size: 10px; color: #38bdf8; font-family: monospace;">AUDITORIA CONSULTIVA & PARECER TÉCNICO</div>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <button id="btnRegenerateReport" class="btn-secondary" style="padding: 4px 8px; font-size: 11px;" title="Regenerar relatório com IA">
+            ✨ Reanalisar
+          </button>
+          <button id="btnCopyReport" class="btn-secondary" style="padding: 4px 8px; font-size: 11px; background: #0369a1; color: #fff; border-color: #38bdf8;" title="Copiar relatório formatado em Markdown">
+            📋 Copiar Relatório Formatado
+          </button>
+        </div>
       </div>
-      <div id="verdictContent" style="font-size: 12px; color: #cbd5e1; line-height: 1.5;"></div>
+      <div id="verdictContent" class="editorial-markdown"></div>
     </div>
   </div>
 
@@ -161,6 +196,9 @@
     </p>
   </div>
 
+  <!-- Marked Markdown Parser (Local MV3 bundle) -->
+  <script src="marked.min.js"></script>
+  <!-- Sidepanel Application Controller -->
   <script src="sidepanel.js"></script>
 </body>
 </html>
