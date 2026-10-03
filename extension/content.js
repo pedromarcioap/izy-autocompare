@@ -124,7 +124,7 @@
 
     // Tentativa Primária: Tabela e listas de especificações da Shopee
     const specRows = document.querySelectorAll(
-      'div.page-product__detail tr, .section-product-specification tr, div[class*="product-detail"] tr, div._2-5R_w, div.e8lZp3, div.pdp-params tr, div[class*="specification"] tr, div.a11y-specs-item'
+      'div.page-product__detail tr, .section-product-specification tr, div[class*="product-detail"] tr, div._2-5R_w, div.e8lZp3, div.pdp-params tr, div[class*="specification"] tr, div.a11y-specs-item, div.G27fpf, div.dR8n_F, div[class*="specification"] div'
     );
 
     specRows.forEach((row) => {
@@ -144,15 +144,15 @@
         .join('\n');
     }
 
-    // Tentativa Secundária: Texto Global de Descrição (primeiros 1.500 caracteres)
-    if (!raw_specs || raw_specs.length < 30) {
+    // Tentativa Secundária: Texto Global de Descrição (até 3.500 caracteres para compatibilidade de autopeças)
+    if (!raw_specs || raw_specs.length < 50) {
       const descEl =
         document.querySelector('div._3y5X4B') ||
         document.querySelector('div.e8lZp3') ||
         document.querySelector('div[class*="description"]') ||
         document.querySelector('div[class*="product-detail"]');
       if (descEl && descEl.innerText) {
-        const descText = descEl.innerText.trim().slice(0, 1500);
+        const descText = descEl.innerText.trim().slice(0, 3500);
         if (descText.length > 20) {
           raw_specs = (raw_specs ? raw_specs + '\n\n' : '') + descText;
           // Extract any key-value lines from description
@@ -263,7 +263,7 @@
 
     // Tentativa Primária: Tabela e itens de especificação do AliExpress
     const propItems = document.querySelectorAll(
-      '[data-spm="specification"] li, .specification--prop li, ul.product-specs li, .pdp-info-right li, #product-prop li, .specification--list-- li, .prop-item, .specification--propItem--, ul.product-prop-list li'
+      '[data-spm="specification"] li, .specification--prop li, ul.product-specs li, .pdp-info-right li, #product-prop li, .specification--list-- li, .prop-item, .specification--propItem--, ul.product-prop-list li, div[class*="specification"] li, tr[class*="specification"]'
     );
 
     propItems.forEach((item) => {
@@ -288,15 +288,15 @@
         .join('\n');
     }
 
-    // Tentativa Secundária: Texto Global de Descrição (primeiros 1.500 caracteres)
-    if (!raw_specs || raw_specs.length < 30) {
+    // Tentativa Secundária: Texto Global de Descrição (até 3.500 caracteres)
+    if (!raw_specs || raw_specs.length < 50) {
       const descEl =
         document.querySelector('.detail-desc-decorate-richtext') ||
         document.querySelector('#product-description') ||
         document.querySelector('.product-description') ||
         document.querySelector('div[class*="description"]');
       if (descEl && descEl.innerText) {
-        const descText = descEl.innerText.trim().slice(0, 1500);
+        const descText = descEl.innerText.trim().slice(0, 3500);
         if (descText.length > 20) {
           raw_specs = (raw_specs ? raw_specs + '\n\n' : '') + descText;
           descText.split('\n').forEach(line => {

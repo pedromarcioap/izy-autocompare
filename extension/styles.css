@@ -36,13 +36,16 @@ body {
   width: 6px;
   height: 6px;
 }
+
 ::-webkit-scrollbar-track {
   background: rgba(15, 23, 42, 0.6);
 }
+
 ::-webkit-scrollbar-thumb {
   background: rgba(51, 65, 85, 0.8);
   border-radius: 9999px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(100, 116, 139, 0.9);
 }
@@ -60,21 +63,21 @@ body {
 }
 
 .badge-shopee {
-  background: rgba(238, 77, 45, 0.15);
+  background: #2b1719;
   color: #ff5722;
-  border: 1px solid rgba(238, 77, 45, 0.3);
+  border: 1px solid #5c2a22;
 }
 
 .badge-ali {
-  background: rgba(255, 106, 0, 0.15);
+  background: #2e1b13;
   color: #ff8c00;
-  border: 1px solid rgba(255, 106, 0, 0.3);
+  border: 1px solid #5c3413;
 }
 
 .badge-cheapest {
-  background: rgba(16, 185, 129, 0.2);
+  background: #0a2f2b;
   color: #34d399;
-  border: 1px solid rgba(16, 185, 129, 0.4);
+  border: 1px solid #1c5c4a;
 }
 
 .btn-primary {
@@ -132,13 +135,15 @@ table {
   font-size: 12px;
 }
 
-th, td {
+th,
+td {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border-color);
   border-right: 1px solid rgba(30, 41, 59, 0.5);
 }
 
-th:last-child, td:last-child {
+th:last-child,
+td:last-child {
   border-right: none;
 }
 
@@ -159,4 +164,47 @@ tr:hover td {
 
 .disparity-cell {
   background: rgba(245, 158, 11, 0.08);
+}
+
+.badge-base {
+  color: #38bdf8;
+  font-weight: 700;
+}
+
+.badge-equal {
+  color: #34d399;
+  font-weight: 700;
+}
+
+.badge-divergent {
+  color: #f59e0b;
+  font-weight: 700;
+}
+
+.badge-superior {
+  color: #10b981;
+  font-weight: 700;
+}
+
+.badge-inferior {
+  color: #f43f5e;
+  font-weight: 700;
+}
+
+.badge-danger {
+  color: #f43f5e;
+  font-weight: 800;
+  background: #2c1521;
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.badge-missing {
+  color: #64748b;
+}
+
+.active-base-btn {
+  background: #0369a1 !important;
+  color: #fff !important;
+  border-color: #38bdf8 !important;
 }

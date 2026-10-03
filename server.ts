@@ -6,6 +6,10 @@ import { GoogleGenAI } from '@google/genai';
 dotenv.config();
 
 const app = express();
+
+// Disable the X-Powered-By header to avoid disclosing the Express version.
+app.disable('x-powered-by');
+
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: '10mb' }));
@@ -36,8 +40,8 @@ app.post('/api/ai-audit', async (req, res) => {
     activeSlots.forEach((slot: any) => {
       const specsText = slot.raw_specs || (slot.specs
         ? Object.entries(slot.specs)
-            .map(([k, v]) => `- ${k}: ${v}`)
-            .join('\n')
+          .map(([k, v]) => `- ${k}: ${v}`)
+          .join('\n')
         : '');
 
       slotsPromptText += `\n--- SLOT ${slot.id} (${slot.platform}) ${slot.id === baseSlotId ? '[SLOT BASE DE REFERÊNCIA]' : ''} ---
@@ -48,38 +52,50 @@ ${specsText || slot.title || 'Nenhuma especificação informada'}
 `;
     });
 
-    const systemInstruction = `Você é um Auditor Técnico Especialista em Produtos e E-commerce.
-Sua missão é analisar os dados de até 5 produtos capturados nos slots (Slot 1 a Slot 5) e gerar um relatório comparativo rigoroso.
+    const systemInstruction = `Você é um Auditor Técnico Especialista em Produtos, Autopeças e E-commerce.
+Sua missão é analisar rigorosamente os dados de produtos capturados em até 5 slots (Slot 1 a Slot 5) e gerar um relatório comparativo técnico e financeiro estruturado.
 
-DIRETRIZES DE AUDITORIA:
-1. Extração Dinâmica e Agnóstica: O produto pode ser qualquer coisa (artigos de arte, hardware, roupas, ferramentas, papelaria, etc.). Não use esquemas pré-fixados.
-2. Fallback por Título: Se o campo 'raw_specs' de algum slot contiver apenas o título ou pouca informação, EXTRAIA AS ESPECIFICAÇÕES DIRETAMENTE DO TÍTULO (ex.: gramatura '180GSM', composição '50% Cotton', encadernação 'Hardcover', dimensões 'A5 / 8.3x5.9in', número de folhas/páginas, voltagem, torque, etc.).
+DIRETRIZES DE AUDITORIA (100% DINÂMICAS E MUTÁVEIS):
+1. Extração Dinâmica e Agnóstica de Categoria:
+   - Os produtos podem pertencer a QUALQUER categoria: Veículos & Autopeças (pastilhas, amortecedores, velas, filtros, etc.), Papelaria & Livros (cadernos, papéis, sketchbooks), Ferramentas Elétricas/Manuais, Hardware & Informática, Áudio, Vestuário, etc.
+   - NUNCA assuma esquemas pré-fixados de uma única categoria. Adapte as especificações e o vocabulário à categoria real dos produtos analisados.
+
+2. Extração Minuciosa do Título e Descrição:
+   - Se a ficha técnica (raw_specs) for sucinta, extraia ativamente todas as especificações presentes no título e no texto.
+   - Exemplos em Autopeças: Modelo/Veículo compatível (ex: Gol G5, Civic, Corolla), Faixa de Anos (ex: 2008 a 2014), Posição/Lado de montagem (Dianteiro, Traseiro, Par), Código OEM/Part Number, Fabricante da peça (Bosch, Fras-le, Cofap), Material (Cerâmica, Semi-metálica), etc.
+   - Exemplos em Papelaria: Gramatura (180g/m², 300g), Quantidade de folhas/páginas (50 folhas, 100 fls), Formato (A4, A5), Tipo de capa (Capa dura, Espiral), Composição da fibra (100% algodão, celulose), etc.
+   - Exemplos em Outras Categorias: Tensão/Voltagem, Torque, Bateria, Potência, Garantia, Dimensões, etc.
+
 3. Matriz Canônica (Chave a Chave):
-   - Crie uma linha para cada propriedade relevante encontrada (ex.: Dimensões/Tamanho, Gramatura/Espessura, Material/Composição da Fibra, Quantidade de Folhas/Páginas, Tipo de Encadernação/Capa, Indicação de Uso, etc.).
-   - O Slot 1 é SEMPRE a base de referência.
-   - Para os Slots 2, 3, 4 e 5, preencha o valor correspondente e classifique na própria string como:
-     * [Idêntico]: Especificação equivalente ou igual ao Slot 1.
-     * [Divergente]: Especificação diferente (indicar se é superior, inferior ou alternativa).
-     * [Não informado]: Quando não houver dado disponível nem no título nem no texto.
-4. Veredito Técnico e Comercial:
-   - Aponte "falsos matches" de preço baixo (ex.: o Slot X é muito mais barato porque usa papel fino de 70g ou apenas 30 folhas, enquanto o Slot 1 oferece 180g com 50% algodão).
-   - Destaque o real campeão de custo-benefício técnico.
+   - Crie uma linha para cada propriedade técnica relevante identificada entre os anúncios.
+   - O Slot ${baseSlotId} é a BASE DE REFERÊNCIA de confronto.
+   - Para cada um dos slots avaliados, preencha o valor e classifique a relação vs o Slot ${baseSlotId} como:
+     * [Idêntico]: Especificação tecnicamente equivalente ao Slot Base.
+     * [Superior (+)]: Especificação quantitativa ou qualitativa superior (ex: maior garantia, mais folhas, maior torque, material nobre).
+     * [Inferior (-)]: Especificação inferior (ex: menor durabilidade, menor garantia, menos peças).
+     * [Divergente]: Especificação diferente ou incompatível (ex: compatível com veículo diferente, posição traseira vs dianteira, cor diferente).
+     * [Não informado]: Quando o vendedor não informar o atributo.
+
+4. Veredito Técnico e Comercial Contextualizado:
+   - Identifique armadilhas de preço baixo (ex.: Slot X é mais barato por ter material inferior, omitir código OEM, oferecer menos unidades/folhas ou ter menor período de garantia).
+   - Indique se a opção de menor custo é uma compra segura (equivalente) ou se exige cautela técnica.
+   - Em autopeças, reforce a importância da compatibilidade de modelo, ano e posição antes da compra.
 
 FORMATO DE RETORNO OBRIGATÓRIO (JSON PURO):
 {
-  "category": "Nome da categoria inferida",
-  "reference_slot": 1,
+  "category": "Nome exato da categoria identificada (ex: Veículos & Autopeças, Papelaria & Artigos de Arte, etc.)",
+  "reference_slot": ${baseSlotId},
   "specs_matrix": [
     {
-      "attribute": "Nome da Especificação (ex: Gramatura)",
-      "slot_1": "180 g/m²",
-      "slot_2": "Não informada (Inferior)",
-      "slot_3": "180 g/m² (Idêntico)",
-      "slot_4": "Não informada",
-      "slot_5": "160 g/m² (Ligeiramente inferior)"
+      "attribute": "Nome da Especificação (ex: Compatibilidade / Veículos ou Gramatura / Espessura)",
+      "slot_1": "Valor do Slot 1",
+      "slot_2": "Valor do Slot 2 (Classificação)",
+      "slot_3": "Valor do Slot 3 (Classificação)",
+      "slot_4": "Valor do Slot 4",
+      "slot_5": "Valor do Slot 5"
     }
   ],
-  "technical_verdict": "Texto de 2 a 3 frases explicando as armadilhas de preço e qual oferece a melhor especificação técnica real."
+  "technical_verdict": "Veredito técnico de 2 a 3 frases apontando claramente as divergências do produto mais barato vs o Slot Base e qual oferece o melhor custo-benefício real."
 }`;
 
     const prompt = `Analise detalhadamente os dados dos seguintes produtos capturados nos slots e gere a matriz de confronto técnico e financeiro:
@@ -130,4 +146,4 @@ async function startServer() {
   });
 }
 
-startServer();
+await startServer();
